@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">BULK PRODUCT MEDIA</p>
+  <h1>Match every image to the right Shopify product.</h1>
+  <p class="lead">Upload one ZIP. Images are resized, converted to JPEG, compared against product titles, handles, SKUs and barcodes, then held for your approval.</p>
+</section>
+{% if upload_error %}<div class="notice error">{{ upload_error }}</div>{% endif %}
+<section class="card upload-card">
+  <div><span class="step">01</span><h2>Choose your image archive</h2></div>
+  <form method="post" action="{{ url_for('create_job') }}" enctype="multipart/form-data">
+    <label class="dropzone">
+      <input type="file" name="archive" accept=".zip,application/zip" required>
+      <strong>Drop a ZIP here or click to browse</strong>
+      <span>Up to 500 MB by default</span>
+    </label>
+    <button type="submit" {% if not configured %}disabled{% endif %}>Analyse images</button>
+  </form>
+  {% if not configured %}<p class="warning">Shopify credentials are not configured. Copy <code>.env.example</code> to <code>.env</code> first.</p>{% endif %}
+</section>
+<section class="features">
+  <article><span>02</span><h3>Smart matching</h3><p>Exact SKU and barcode matches lead; fuzzy title and handle matches provide ranked alternatives.</p></article>
+  <article><span>03</span><h3>Human review</h3><p>Ambiguous results remain unselected, so nothing is attached to the wrong product silently.</p></article>
+  <article><span>04</span><h3>Safe upload</h3><p>Orientation, dimensions, megapixels, format and file size are normalized before staged upload.</p></article>
+</section>
+{% endblock %}
+

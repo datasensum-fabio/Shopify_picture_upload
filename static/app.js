@@ -390,7 +390,7 @@ async function analyse() {
           selectedId: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].id : "",
           pictureMetal,
           selectedVariantIds: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].variant_ids : [],
-          uploadStatus: duplicateOf ? "duplicate" : existingImage ? "already_on_shopify" : "pending", error: "",
+          uploadStatus: duplicateOf ? "duplicate" : existingImage ? "already_on_shopify" : "pending", userExcluded: false, error: "",
         });
       }
     }
@@ -488,10 +488,22 @@ function render() {
     const badge = fragment.querySelector(".match-status");
     badge.textContent = effectiveMatchStatus.replaceAll("_", " ");
     badge.className = `match-status ${effectiveMatchStatus}`;
+    const skipUpload = fragment.querySelector(".skip-upload");
+    const skipCheckbox = skipUpload.querySelector("input");
+    if (!row.isDuplicate && !row.isAlreadyOnShopify && row.selectedId) {
+      skipUpload.classList.remove("hidden");
+      skipCheckbox.checked = row.userExcluded;
+      skipCheckbox.disabled = state.running || row.uploadStatus === "uploaded";
+      skipCheckbox.addEventListener("change", () => {
+        row.userExcluded = skipCheckbox.checked;
+        persistManifest(); render();
+      });
+    }
     fragment.querySelector(".upload-status").textContent = row.isDuplicate
       ? `Same SHA-256 as ${row.duplicateOf.archive} / ${row.duplicateOf.filename}`
       : row.isAlreadyOnShopify
         ? `Visual match already attached${row.existingImage.alt ? `: ${row.existingImage.alt}` : ""}`
+      : row.userExcluded ? "Upload stopped by user"
       : row.uploadStatus === "pending" ? "" : row.uploadStatus;
     fragment.querySelector(".row-error").textContent = row.error;
     tbody.append(fragment);
@@ -508,7 +520,7 @@ function renderSummary() {
     if (counts[row.uploadStatus] !== undefined && !["duplicate", "already_on_shopify"].includes(row.uploadStatus)) counts[row.uploadStatus]++;
   }
   $("#summary").innerHTML = `<div><strong>${counts.auto_approved}</strong><small>automatic</small></div><div><strong>${counts.needs_review}</strong><small>review</small></div><div><strong>${counts.no_match}</strong><small>unmatched</small></div><div><strong>${counts.duplicate}</strong><small>duplicates</small></div><div><strong>${counts.already_on_shopify}</strong><small>already on Shopify</small></div><div><strong>${counts.uploaded}</strong><small>uploaded</small></div>`;
-  const selected = state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify && row.selectedId && row.uploadStatus !== "uploaded").length;
+  const selected = state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify && !row.userExcluded && row.selectedId && row.uploadStatus !== "uploaded").length;
   $("#upload-count").textContent = `${selected} image${selected === 1 ? "" : "s"} selected`;
   $("#upload").disabled = DEMO_MODE || !selected || state.running;
 }
@@ -556,7 +568,7 @@ async function uploadTarget(target, blob, filename) {
 
 async function uploadAll() {
   if (state.running || DEMO_MODE) return;
-  const queue = state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify && row.selectedId && row.uploadStatus !== "uploaded");
+  const queue = state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify && !row.userExcluded && row.selectedId && row.uploadStatus !== "uploaded");
   if (!queue.length) return;
   state.running = true; render();
   $("#working").classList.remove("hidden", "error-card");
@@ -584,7 +596,7 @@ async function uploadAll() {
 }
 
 function persistManifest() {
-  const manifest = state.rows.map(({ archive, filename, matchStatus, selectedId, uploadStatus, error }) => ({ archive, filename, matchStatus, selectedId, uploadStatus, error }));
+  const manifest = state.rows.map(({ archive, filename, matchStatus, selectedId, uploadStatus, userExcluded, error }) => ({ archive, filename, matchStatus, selectedId, uploadStatus, userExcluded, error }));
   localStorage.setItem("shopify-image-matcher:last-job", JSON.stringify({ updatedAt: new Date().toISOString(), manifest }));
 }
 
@@ -599,6 +611,7 @@ function restoreManifest() {
     if (!old) continue;
     row.selectedId = old.selectedId || row.selectedId;
     row.uploadStatus = old.uploadStatus || row.uploadStatus;
+    row.userExcluded = Boolean(old.userExcluded);
     row.error = old.error || "";
   }
 }

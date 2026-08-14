@@ -13,6 +13,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .shopify-product-gallery { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; overflow: auto; }
 .shopify-product-gallery img { width: 82px; height: 82px; }
 .product-images-message { max-width: 150px; padding: 8px 0; }
+.skip-upload { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--red); white-space: nowrap; }
 .match-status.duplicate { background: #e5e7e2; color: #445149; }
 .match-status.already_on_shopify { background: #e6eef9; color: #244b78; }
 .summary-grid { grid-template-columns: repeat(6, 90px); }

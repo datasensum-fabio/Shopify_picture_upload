@@ -108,6 +108,11 @@ export function detectMetalInValues(values) {
   return null;
 }
 
+export async function sha256Hex(blob) {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function levenshtein(a, b) {
   if (a.length > b.length) [a, b] = [b, a];
   let previous = Array.from({ length: a.length + 1 }, (_, i) => i);

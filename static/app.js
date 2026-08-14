@@ -1,5 +1,5 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
-import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, similarity } from "./matching.js";
+import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, sha256Hex, similarity } from "./matching.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -227,6 +227,7 @@ async function analyse() {
     state.products = state.catalogFile ? await loadCsvCatalog(state.catalogFile) : await loadCatalog();
     buildCatalogIndex();
     state.rows = [];
+    const seenHashes = new Map();
     let expanded = 0, entryCount = 0;
     for (let fileIndex = 0; fileIndex < state.files.length; fileIndex++) {
       const file = state.files[fileIndex];
@@ -243,17 +244,21 @@ async function analyse() {
         expanded += entry.uncompressedSize;
         if (expanded > MAX_EXPANDED_BYTES) throw new Error(`The archives expand beyond ${formatBytes(MAX_EXPANDED_BYTES)}.`);
         if (entry.compressedSize && entry.uncompressedSize / entry.compressedSize > MAX_RATIO) throw new Error(`${entry.filename} has an unsafe compression ratio.`);
+        setWorking("Checking image duplicates", `${file.name}: ${entry.filename}`, 40);
+        const imageHash = await sha256Hex(await entry.getData(new BlobWriter()));
+        const duplicateOf = seenHashes.get(imageHash) || null;
+        if (!duplicateOf) seenHashes.set(imageHash, { archive: file.name, filename: entry.filename.replace(/^.*[\\/]/, "") });
         const suggestions = rankProducts(entry.filename);
         const pictureMetal = detectMetal(entry.filename);
         const matchStatus = classify(suggestions, pictureMetal);
         state.rows.push({
           id: `${fileIndex}:${entry.index ?? state.rows.length}`,
           fileIndex, entry, filename: entry.filename.replace(/^.*[\\/]/, ""),
-          archive: file.name, suggestions, matchStatus,
-          selectedId: matchStatus === "auto_approved" ? suggestions[0].id : "",
+          archive: file.name, suggestions, matchStatus, imageHash, duplicateOf, isDuplicate: Boolean(duplicateOf),
+          selectedId: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].id : "",
           pictureMetal,
-          selectedVariantIds: matchStatus === "auto_approved" ? suggestions[0].variant_ids : [],
-          uploadStatus: "pending", error: "",
+          selectedVariantIds: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].variant_ids : [],
+          uploadStatus: duplicateOf ? "duplicate" : "pending", error: "",
         });
       }
     }
@@ -277,7 +282,7 @@ function render() {
   const tbody = $("#rows");
   tbody.replaceChildren();
   for (const row of state.rows) {
-    if (state.filter !== "all" && row.matchStatus !== state.filter && row.uploadStatus !== state.filter) continue;
+    if (state.filter !== "all" && row.matchStatus !== state.filter && row.uploadStatus !== state.filter && !(state.filter === "duplicate" && row.isDuplicate)) continue;
     const fragment = $("#row-template").content.cloneNode(true);
     const tr = fragment.querySelector("tr");
     tr.dataset.id = row.id;
@@ -302,7 +307,7 @@ function render() {
       option.selected = product.id === row.selectedId;
       select.append(option);
     }
-    select.disabled = row.uploadStatus === "uploaded" || state.running;
+    select.disabled = row.isDuplicate || row.uploadStatus === "uploaded" || state.running;
     select.addEventListener("change", () => {
       row.selectedId = select.value;
       if (select.value && row.matchStatus === "no_match") row.matchStatus = "needs_review";
@@ -316,9 +321,11 @@ function render() {
     score.className = `score ${row.matchStatus}`;
     fragment.querySelector(".matched-on").textContent = top ? `${top.matched_on}: ${top.matched_value}` : "No candidate";
     const badge = fragment.querySelector(".match-status");
-    badge.textContent = row.matchStatus.replace("_", " ");
-    badge.className = `match-status ${row.matchStatus}`;
-    fragment.querySelector(".upload-status").textContent = row.uploadStatus === "pending" ? "" : row.uploadStatus;
+    badge.textContent = row.isDuplicate ? "duplicate" : row.matchStatus.replace("_", " ");
+    badge.className = `match-status ${row.isDuplicate ? "duplicate" : row.matchStatus}`;
+    fragment.querySelector(".upload-status").textContent = row.isDuplicate
+      ? `Same SHA-256 as ${row.duplicateOf.archive} / ${row.duplicateOf.filename}`
+      : row.uploadStatus === "pending" ? "" : row.uploadStatus;
     fragment.querySelector(".row-error").textContent = row.error;
     tbody.append(fragment);
   }
@@ -326,10 +333,14 @@ function render() {
 }
 
 function renderSummary() {
-  const counts = { auto_approved: 0, needs_review: 0, no_match: 0, uploaded: 0, failed: 0 };
-  for (const row of state.rows) { counts[row.matchStatus]++; if (counts[row.uploadStatus] !== undefined) counts[row.uploadStatus]++; }
-  $("#summary").innerHTML = `<div><strong>${counts.auto_approved}</strong><small>automatic</small></div><div><strong>${counts.needs_review}</strong><small>review</small></div><div><strong>${counts.no_match}</strong><small>unmatched</small></div><div><strong>${counts.uploaded}</strong><small>uploaded</small></div>`;
-  const selected = state.rows.filter((row) => row.selectedId && row.uploadStatus !== "uploaded").length;
+  const counts = { auto_approved: 0, needs_review: 0, no_match: 0, duplicate: 0, uploaded: 0, failed: 0 };
+  for (const row of state.rows) {
+    if (row.isDuplicate) counts.duplicate++;
+    else counts[row.matchStatus]++;
+    if (counts[row.uploadStatus] !== undefined && row.uploadStatus !== "duplicate") counts[row.uploadStatus]++;
+  }
+  $("#summary").innerHTML = `<div><strong>${counts.auto_approved}</strong><small>automatic</small></div><div><strong>${counts.needs_review}</strong><small>review</small></div><div><strong>${counts.no_match}</strong><small>unmatched</small></div><div><strong>${counts.duplicate}</strong><small>duplicates</small></div><div><strong>${counts.uploaded}</strong><small>uploaded</small></div>`;
+  const selected = state.rows.filter((row) => !row.isDuplicate && row.selectedId && row.uploadStatus !== "uploaded").length;
   $("#upload-count").textContent = `${selected} image${selected === 1 ? "" : "s"} selected`;
   $("#upload").disabled = DEMO_MODE || !selected || state.running;
 }
@@ -377,7 +388,7 @@ async function uploadTarget(target, blob, filename) {
 
 async function uploadAll() {
   if (state.running || DEMO_MODE) return;
-  const queue = state.rows.filter((row) => row.selectedId && row.uploadStatus !== "uploaded");
+  const queue = state.rows.filter((row) => !row.isDuplicate && row.selectedId && row.uploadStatus !== "uploaded");
   if (!queue.length) return;
   state.running = true; render();
   $("#working").classList.remove("hidden", "error-card");
@@ -415,6 +426,7 @@ function restoreManifest() {
   catch { return; }
   const previous = new Map((saved?.manifest || []).map((row) => [`${row.archive}\u0000${row.filename}`, row]));
   for (const row of state.rows) {
+    if (row.isDuplicate) continue;
     const old = previous.get(`${row.archive}\u0000${row.filename}`);
     if (!old) continue;
     row.selectedId = old.selectedId || row.selectedId;

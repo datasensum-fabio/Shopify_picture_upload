@@ -90,16 +90,12 @@ function productChoiceLabel(suggestion, pictureMetal) {
   const matchingVariants = pictureMetal
     ? allVariants.filter((variant) => variantMetal(variant)?.code === pictureMetal.code)
     : allVariants;
-  const variants = matchingVariants.length ? matchingVariants : allVariants;
-  const unique = (values) => [...new Set(values.filter(Boolean))];
-  const metals = unique(variants.map((variant) => variantMetal(variant)?.code));
-  const barcodes = unique(variants.map((variant) => variant.barcode));
-  const skus = unique(variants.map((variant) => variant.sku));
+  const representative = matchingVariants[0] || allVariants[0];
   return [
     suggestion.handle,
-    metals.join(", ") || "Metal not specified",
-    barcodes.join(", ") || "No barcode",
-    skus.join(", ") || "No SKU",
+    variantMetal(representative || {})?.code || "Metal not specified",
+    representative?.barcode || "No barcode",
+    representative?.sku || "No SKU",
   ].join(" - ");
 }
 

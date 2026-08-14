@@ -370,21 +370,19 @@ async function analyse() {
         const pictureMetal = detectMetal(entry.filename);
         const matchStatus = classify(suggestions, pictureMetal);
         let existingImage = null;
-        if (!duplicateOf && matchStatus === "auto_approved" && suggestions[0]) {
-          const matchedProduct = state.products.find((product) => product.id === suggestions[0].id);
+        const matchedProduct = suggestions[0] ? state.products.find((product) => product.id === suggestions[0].id) : null;
+        if (!duplicateOf && matchedProduct && matchStatus !== "no_match") {
           try {
             await ensureProductImages(matchedProduct);
-            if (productImages(matchedProduct).length) {
+            if (matchStatus === "auto_approved" && productImages(matchedProduct).length) {
               setWorking("Comparing existing Shopify images", `${matchedProduct.handle}: ${entry.filename}`, 55);
               existingImage = await findExistingImage(matchedProduct, await visualFingerprint(sourceBlob));
             }
           } catch { existingImage = null; }
         }
         let localPreviewUrl = "";
-        if (existingImage) {
-          try { localPreviewUrl = await localThumbnailUrl(sourceBlob); }
-          catch { localPreviewUrl = ""; }
-        }
+        try { localPreviewUrl = await localThumbnailUrl(sourceBlob); }
+        catch { localPreviewUrl = ""; }
         state.rows.push({
           id: `${fileIndex}:${entry.index ?? state.rows.length}`,
           fileIndex, entry, filename: entry.filename.replace(/^.*[\\/]/, ""),
@@ -423,12 +421,31 @@ function render() {
     tr.dataset.id = row.id;
     fragment.querySelector(".filename").textContent = row.filename;
     fragment.querySelector(".archive-name").textContent = row.archive;
-    if (row.isAlreadyOnShopify && row.localPreviewUrl && row.existingImage?.url) {
-      fragment.querySelector(".image-comparison").classList.remove("hidden");
-      fragment.querySelector(".no-comparison").classList.add("hidden");
+    if (row.localPreviewUrl) {
       fragment.querySelector(".local-preview").src = row.localPreviewUrl;
-      fragment.querySelector(".shopify-preview").src = shopifyPreviewUrl(row.existingImage.url, 180);
-      fragment.querySelector(".shopify-preview-link").href = row.existingImage.url;
+      fragment.querySelector(".local-preview-missing").classList.add("hidden");
+    } else {
+      fragment.querySelector(".local-preview").classList.add("hidden");
+    }
+    const selectedSuggestion = row.suggestions.find((item) => item.id === row.selectedId) || row.suggestions[0];
+    const selectedProduct = state.products.find((product) => product.id === selectedSuggestion?.id);
+    const showProductImages = !row.isDuplicate && ["auto_approved", "needs_review"].includes(row.matchStatus);
+    if (showProductImages) {
+      const images = productImages(selectedProduct);
+      const gallery = fragment.querySelector(".shopify-product-gallery");
+      if (images.length) {
+        fragment.querySelector(".product-images-message").classList.add("hidden");
+        for (const [index, image] of images.entries()) {
+          const link = document.createElement("a");
+          link.href = image.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+          const preview = document.createElement("img");
+          preview.src = shopifyPreviewUrl(image.url, 180); preview.loading = "lazy";
+          preview.alt = image.alt || `Shopify product image ${index + 1}`;
+          link.append(preview); gallery.append(link);
+        }
+      }
+    } else {
+      fragment.querySelector(".product-images-message").textContent = row.isDuplicate ? "Duplicate ZIP image" : "No matched product";
     }
     const handle = fragment.querySelector(".product-handle");
     handle.textContent = row.suggestions.find((item) => item.id === row.selectedId)?.handle || row.suggestions[0]?.handle || "—";
@@ -450,12 +467,18 @@ function render() {
       select.append(option);
     }
     select.disabled = row.isDuplicate || row.isAlreadyOnShopify || row.uploadStatus === "uploaded" || state.running;
-    select.addEventListener("change", () => {
+    select.addEventListener("change", async () => {
       row.selectedId = select.value;
       if (select.value && row.matchStatus === "no_match") row.matchStatus = "needs_review";
       handle.textContent = row.suggestions.find((item) => item.id === select.value)?.handle || "—";
       updateMetalMatch();
-      persistManifest(); renderSummary();
+      const product = state.products.find((item) => item.id === select.value);
+      if (product) {
+        select.disabled = true;
+        try { await ensureProductImages(product); }
+        catch { row.error = "Could not load this product's Shopify images."; }
+      }
+      persistManifest(); render();
     });
     const top = row.suggestions[0];
     const score = fragment.querySelector(".score");

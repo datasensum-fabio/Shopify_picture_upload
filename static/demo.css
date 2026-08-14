@@ -4,11 +4,15 @@
 .file-row span { font-weight: 750; }
 .file-row input { max-width: 60%; }
 code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.image-comparison { display: flex; gap: 8px; min-width: 230px; }
-.image-comparison figure { margin: 0; width: 108px; }
+.image-comparison { display: flex; align-items: flex-start; gap: 12px; min-width: 280px; }
+.image-comparison figure { flex: 0 0 108px; margin: 0; width: 108px; }
 .image-comparison img { display: block; width: 108px; height: 108px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .image-comparison figcaption { margin-top: 4px; color: var(--muted); font-size: 11px; text-align: center; }
-.comparison-cell .no-comparison { max-width: 150px; }
+.product-images { max-width: 360px; }
+.product-images > span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.shopify-product-gallery { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; overflow: auto; }
+.shopify-product-gallery img { width: 82px; height: 82px; }
+.product-images-message { max-width: 150px; padding: 8px 0; }
 .match-status.duplicate { background: #e5e7e2; color: #445149; }
 .match-status.already_on_shopify { background: #e6eef9; color: #244b78; }
 .summary-grid { grid-template-columns: repeat(6, 90px); }

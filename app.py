@@ -85,6 +85,21 @@ def products():
     return jsonify(page)
 
 
+@app.get("/api/product-media")
+@require_auth
+def product_media():
+    if DEMO_MODE:
+        return api_error("Demo mode uses image URLs from the selected Shopify CSV.", 503)
+    product_id = request.args.get("product_id", "")
+    if not product_id.startswith("gid://shopify/Product/"):
+        return api_error("Invalid product ID.")
+    try:
+        media = ShopifyClient().get_product_media(product_id)
+    except ShopifyError as exc:
+        return api_error(str(exc), 502)
+    return jsonify({"media": media})
+
+
 @app.post("/api/staged-uploads")
 @require_auth
 def staged_uploads():

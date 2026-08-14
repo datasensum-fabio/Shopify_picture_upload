@@ -47,10 +47,11 @@
     <button type="button" class="filter" data-filter="needs_review">Needs review</button>
     <button type="button" class="filter" data-filter="no_match">No match</button>
     <button type="button" class="filter" data-filter="duplicate">Duplicates</button>
+    <button type="button" class="filter" data-filter="already_on_shopify">Already on Shopify</button>
     <button type="button" class="filter" data-filter="failed">Failed</button>
   </div>
   <div class="table-wrap"><table>
-    <thead><tr><th>Picture name</th><th>Matched Shopify handle</th><th>Metal / Shopify variant</th><th>Product choice</th><th>Confidence</th><th>Decision</th></tr></thead>
+    <thead><tr><th>Picture name</th><th>Image comparison</th><th>Matched Shopify handle</th><th>Metal / Shopify variant</th><th>Product choice</th><th>Confidence</th><th>Decision</th></tr></thead>
     <tbody id="rows"></tbody>
   </table></div>
   <div class="actionbar">
@@ -62,6 +63,7 @@
 <template id="row-template">
   <tr>
     <td><strong class="filename"></strong><small class="archive-name"></small><small class="row-error"></small></td>
+    <td class="comparison-cell"><div class="image-comparison hidden"><figure><img class="local-preview" loading="lazy" alt="ZIP image preview"><figcaption>ZIP image</figcaption></figure><figure><a class="shopify-preview-link" target="_blank" rel="noopener noreferrer"><img class="shopify-preview" loading="lazy" alt="Existing Shopify image preview"></a><figcaption>Shopify image</figcaption></figure></div><small class="no-comparison">Shown when an existing visual match is found</small></td>
     <td><strong class="product-handle"></strong></td>
     <td><strong class="metal-match"></strong></td>
     <td><select class="product-select"><option value="">Skip / no product</option></select></td>

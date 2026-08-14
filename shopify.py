@@ -78,6 +78,21 @@ class ShopifyClient:
             "end_cursor": connection["pageInfo"]["endCursor"],
         }
 
+    def get_product_media(self, product_id: str) -> list[dict[str, Any]]:
+        query = """
+        query ProductMedia($id: ID!) {
+          product(id: $id) {
+            media(first: 100) {
+              nodes { ... on MediaImage { id alt image { url } } }
+            }
+          }
+        }
+        """
+        product = self.graphql(query, {"id": product_id}).get("product")
+        if not product:
+            raise ShopifyError("Shopify product was not found.")
+        return product["media"]["nodes"]
+
     def create_staged_uploads(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         staged_query = """
         mutation Stage($input: [StagedUploadInput!]!) {

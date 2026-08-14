@@ -113,6 +113,15 @@ export async function sha256Hex(blob) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export function visualFingerprintsMatch(left, right, maxPixelDelta = 6, maxHashDistance = 2) {
+  if (!left?.pixels?.length || left.pixels.length !== right?.pixels?.length || left.hash?.length !== right?.hash?.length) return false;
+  let pixelDelta = 0;
+  for (let index = 0; index < left.pixels.length; index++) pixelDelta += Math.abs(left.pixels[index] - right.pixels[index]);
+  let hashDistance = 0;
+  for (let index = 0; index < left.hash.length; index++) hashDistance += left.hash[index] === right.hash[index] ? 0 : 1;
+  return pixelDelta / left.pixels.length <= maxPixelDelta && hashDistance <= maxHashDistance;
+}
+
 export function levenshtein(a, b) {
   if (a.length > b.length) [a, b] = [b, a];
   let previous = Array.from({ length: a.length + 1 }, (_, i) => i);

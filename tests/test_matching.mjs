@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cleanFilename, detectMetal, parseProductCode, productCodeKey } from "../static/matching.js";
+import { cleanFilename, detectMetal, detectMetalInValues, parseProductCode, productCodeKey } from "../static/matching.js";
 
 const sclr = parseProductCode("Sclr068A.jpg");
 const clr = parseProductCode("clr06");
@@ -35,5 +35,6 @@ assert.equal(detectMetal("SKS6667TP SIL (1).jpg").code, "SIL");
 assert.equal(detectMetal("Dp001Dia W9 sub2.jpg").code, "W9");
 assert.equal(parseProductCode("Dp001Dia W9 sub2.jpg").extra, "dia");
 assert.equal(detectMetal("SILVER bracelet.jpg"), null);
+assert.equal(detectMetalInValues(["J - 4.5 - 50", "9CT WHITE GOLD", "'3059"]).code, "W9");
 
 console.log("Structured product-code tests passed.");

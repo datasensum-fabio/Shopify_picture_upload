@@ -1,5 +1,5 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
-import { detectMetal, filenameKeys, normalize, parseProductCode, productCodeKey, similarity } from "./matching.js";
+import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, similarity } from "./matching.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -60,8 +60,11 @@ function rankProducts(filename) {
 
 function variantMetal(variant) {
   if (variant.metal) return variant.metal;
-  const optionText = (variant.selectedOptions || []).map((option) => option.value).join(" ");
-  return detectMetal(`${optionText} ${variant.title || ""} ${variant.sku || ""}`);
+  return detectMetalInValues([
+    ...(variant.selectedOptions || []).map((option) => option.value),
+    variant.title,
+    variant.sku,
+  ]);
 }
 
 function decorateSuggestions(suggestions, filename) {
@@ -174,7 +177,7 @@ async function loadCsvCatalog(file) {
     const selectedOptions = optionColumns.filter((item) => item.name >= 0 && item.value >= 0 && values[item.value]).map((item) => ({
       name: values[item.name] || "Option", value: values[item.value],
     }));
-    const metal = detectMetal(`${selectedOptions.map((item) => item.value).join(" ")} ${sku}`);
+    const metal = detectMetalInValues([...selectedOptions.map((item) => item.value), sku]);
     const variantIndex = products.get(handle).variants.nodes.length + 1;
     products.get(handle).variants.nodes.push({
       id: variantIdColumn >= 0 && values[variantIdColumn] ? values[variantIdColumn] : `csv://Variant/${encodeURIComponent(handle)}/${variantIndex}`,

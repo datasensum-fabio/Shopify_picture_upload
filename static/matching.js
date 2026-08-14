@@ -100,6 +100,14 @@ export function detectMetal(value) {
   return null;
 }
 
+export function detectMetalInValues(values) {
+  for (const value of values) {
+    const metal = detectMetal(String(value || ""));
+    if (metal) return metal;
+  }
+  return null;
+}
+
 export function levenshtein(a, b) {
   if (a.length > b.length) [a, b] = [b, a];
   let previous = Array.from({ length: a.length + 1 }, (_, i) => i);

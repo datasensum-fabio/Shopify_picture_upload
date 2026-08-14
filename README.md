@@ -1,40 +1,103 @@
 # Shopify Image Matcher
 
-A browser-based application that accepts a ZIP of product pictures, preprocesses every image, fuzzy-matches filenames to Shopify products, lets a human review the suggestions, and uploads approved images through Shopify's Admin GraphQL API.
+A local-first browser application for matching images from large ZIP archives to
+Shopify products. ZIP extraction, fuzzy matching and image conversion happen on
+the user's computer. Image bytes go directly from the browser to Shopify and
+never pass through Vercel or the Flask service.
 
-## What it does
+Before Shopify API credentials are available, set `DEMO_MODE=1`. The user then
+selects a standard Shopify product export CSV in the browser. The app aggregates
+the CSV by `Handle` and reads `Title`, `Variant SKU`, and `Variant Barcode` for
+matching. The review table explicitly shows each picture name beside its matched
+Shopify product handle. Demo-mode uploads are disabled.
 
-- Reads ZIP archives safely (no path traversal, entry-count and expanded-size limits).
-- Converts supported images to optimized progressive JPEG, applies EXIF orientation, flattens transparency onto white, and limits output to 5,000 px per side, 20 MP, and under 18 MB.
-- Scores product title, handle, variant SKU, and barcode. Exact SKU/barcode matches get priority.
-- Auto-selects only suggestions above a configurable confidence threshold; every choice remains reviewable.
-- Uses Shopify staged uploads and `productUpdate`, with retry support for rate limiting.
-- Keeps the Admin API token on the server.
+## Architecture
+
+1. Flask retrieves product metadata using the server-only Shopify Admin token.
+2. The browser reads ZIP/ZIP64 archives incrementally using zip.js.
+3. Product handles, titles, SKUs and barcodes are ranked locally.
+4. Matches are classified as `auto approved`, `needs review`, or `no match`.
+5. Approved images are decoded, oriented, resized and converted to JPEG locally.
+6. Flask creates a temporary Shopify staged-upload target.
+7. The browser uploads the JPEG directly to that target.
+8. Flask attaches the staged resource URL to the selected product.
+
+There is no server-side job directory, ZIP upload or image processing. A small
+manifest in browser local storage records selections and completed uploads. To
+resume after closing the page, select the same archives again.
+
+## Archive limits
+
+- 10 GB per ZIP safety cap; multiple ZIPs can form one job.
+- ZIP64 is supported.
+- 10,000 total archive entries and 5,000 supported images per job.
+- 50 GB maximum expanded content per job.
+- 250 MB maximum expanded size for one source image.
+- Compression ratios above 250:1 are rejected as a ZIP-bomb precaution.
+- Processing and upload are sequential to keep memory bounded.
+
+Archives above 2 GB should be processed in desktop Chrome or Edge. The selected
+files remain on disk, but the browser must temporarily decode one full image at a
+time. JPEG, PNG, WebP, GIF and BMP work in current Chromium browsers. HEIC and
+TIFF depend on browser decoder support and are reported as failed when unsupported.
+
+Processed images are limited to 5,000 px on either side, 25 megapixels, and less
+than 20 MB for Shopify.
 
 ## Shopify setup
 
-Create a custom app in Shopify Admin and grant at least:
+Create and install a Shopify custom app with:
 
 - `read_products`
 - `write_products`
 
-Install the app, copy its Admin API access token, then configure this application:
+Copy the example configuration and fill in the permanent `*.myshopify.com`
+domain and Admin API token:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edit `.env`. Use the permanent `*.myshopify.com` domain, not the storefront's custom domain. The default API version is `2026-07`; change it as Shopify versions evolve.
+Set a long random `SECRET_KEY` and an `APP_PASSWORD`. Without `APP_PASSWORD`,
+the app deliberately runs without login protection and must only be used locally.
 
 ## Run with Docker
+
+Install and start Docker Desktop, then run:
 
 ```powershell
 docker compose up --build
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:8000>. To stop or run in the background:
 
-## Run with Python
+```powershell
+docker compose down
+docker compose up -d --build
+```
+
+## Deploy to Vercel
+
+Vercel container deployment uses `Dockerfile.vercel`, which starts Gunicorn on
+Vercel's `$PORT`. Import the GitHub repository into Vercel and configure these
+Production and Preview environment variables:
+
+- `SHOPIFY_STORE`
+- `SHOPIFY_ADMIN_ACCESS_TOKEN`
+- `SHOPIFY_API_VERSION`
+- `SECRET_KEY`
+- `APP_PASSWORD`
+- `DEMO_MODE` (`1` for CSV-only testing; change to `0` after adding credentials)
+
+Redeploy after saving the variables. No Vercel Blob store or persistent disk is
+required because images upload directly to Shopify. All application requests are
+small JSON messages.
+
+The frontend imports zip.js as an ES module from jsDelivr. If the deployment
+must work without a third-party CDN, download and serve that module from
+`static/vendor` instead.
+
+## Run without Docker
 
 ```powershell
 python -m venv .venv
@@ -43,19 +106,11 @@ pip install -r requirements.txt
 python app.py
 ```
 
-## Workflow
-
-1. Upload a `.zip` in the browser.
-2. The server fetches the current Shopify catalog and preprocesses the archive.
-3. Review the five best suggestions for each image. Uncertain rows default to **Skip**.
-4. Click **Upload approved images**. Failed rows remain retryable; successful rows are locked.
-
-Job artifacts live under `data/` and are excluded from Git. Delete old job directories according to your retention policy. For public deployment, put the service behind HTTPS and add your organization's authentication layer.
-
 ## Tests
 
 ```powershell
+pip install pytest
 pytest -q
 ```
 
-The app does not need Shopify credentials for the unit tests.
+Shopify credentials are not required for unit tests.

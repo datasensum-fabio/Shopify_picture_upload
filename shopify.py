@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -51,9 +50,19 @@ class ShopifyClient:
         return payload["data"]
 
     def get_products(self) -> list[dict[str, Any]]:
+        products: list[dict[str, Any]] = []
+        cursor = None
+        while True:
+            page = self.get_products_page(cursor)
+            products.extend(page["products"])
+            if not page["has_next_page"]:
+                return products
+            cursor = page["end_cursor"]
+
+    def get_products_page(self, cursor: str | None = None) -> dict[str, Any]:
         query = """
         query Products($cursor: String) {
-          products(first: 100, after: $cursor) {
+          products(first: 50, after: $cursor) {
             nodes {
               id title handle status
               variants(first: 100) { nodes { id title sku barcode } }
@@ -62,16 +71,14 @@ class ShopifyClient:
           }
         }
         """
-        products: list[dict[str, Any]] = []
-        cursor = None
-        while True:
-            connection = self.graphql(query, {"cursor": cursor})["products"]
-            products.extend(connection["nodes"])
-            if not connection["pageInfo"]["hasNextPage"]:
-                return products
-            cursor = connection["pageInfo"]["endCursor"]
+        connection = self.graphql(query, {"cursor": cursor})["products"]
+        return {
+            "products": connection["nodes"],
+            "has_next_page": connection["pageInfo"]["hasNextPage"],
+            "end_cursor": connection["pageInfo"]["endCursor"],
+        }
 
-    def upload_product_image(self, product_id: str, image_path: Path, alt: str) -> None:
+    def create_staged_uploads(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         staged_query = """
         mutation Stage($input: [StagedUploadInput!]!) {
           stagedUploadsCreate(input: $input) {
@@ -80,24 +87,18 @@ class ShopifyClient:
           }
         }
         """
-        staged = self.graphql(staged_query, {"input": [{
-            "filename": image_path.name,
-            "mimeType": "image/jpeg",
+        inputs = [{
+            "filename": item["filename"],
+            "mimeType": item["mime_type"],
             "httpMethod": "POST",
             "resource": "PRODUCT_IMAGE",
-        }]})["stagedUploadsCreate"]
+        } for item in files]
+        staged = self.graphql(staged_query, {"input": inputs})["stagedUploadsCreate"]
         if staged["userErrors"]:
             raise ShopifyError(str(staged["userErrors"]))
-        target = staged["stagedTargets"][0]
-        fields = {item["name"]: item["value"] for item in target["parameters"]}
-        with image_path.open("rb") as image_file:
-            response = self.session.post(
-                target["url"], data=fields,
-                files={"file": (image_path.name, image_file, "image/jpeg")}, timeout=120,
-            )
-        response.raise_for_status()
+        return staged["stagedTargets"]
 
-        # productUpdate is the supported replacement for deprecated productCreateMedia.
+    def attach_product_image(self, product_id: str, resource_url: str, alt: str) -> None:
         attach_query = """
         mutation Attach($product: ProductUpdateInput!, $media: [CreateMediaInput!]) {
           productUpdate(product: $product, media: $media) {
@@ -109,7 +110,7 @@ class ShopifyClient:
         """
         result = self.graphql(attach_query, {
             "product": {"id": product_id},
-            "media": [{"alt": alt, "mediaContentType": "IMAGE", "originalSource": target["resourceUrl"]}],
+            "media": [{"alt": alt, "mediaContentType": "IMAGE", "originalSource": resource_url}],
         })["productUpdate"]
         errors = result.get("mediaUserErrors", []) + result.get("userErrors", [])
         if errors:

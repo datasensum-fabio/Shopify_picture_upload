@@ -1,0 +1,7 @@
+.notice.demo { background: #e6eef9; color: #244b78; }
+.archive-title { margin-top: 30px; }
+.file-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 15px 18px; background: #fafbf8; }
+.file-row span { font-weight: 750; }
+.file-row input { max-width: 60%; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+@media (max-width: 760px) { .file-row { align-items: flex-start; flex-direction: column; } .file-row input { max-width: 100%; } }

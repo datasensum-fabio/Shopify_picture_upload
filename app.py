@@ -1,117 +1,139 @@
 from __future__ import annotations
 
+import hmac
 import os
-import shutil
-import uuid
-from pathlib import Path
+from functools import wraps
+from typing import Any, Callable
 
 from dotenv import load_dotenv
-from flask import Flask, flash, redirect, render_template, request, url_for
-from werkzeug.utils import secure_filename
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
-from processing import load_json, preprocess_image, rank_products, safe_extract_images, save_json
 from shopify import ShopifyClient, ShopifyError
 
 load_dotenv()
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "development-only-change-me")
-app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_ZIP_MB", "500")) * 1024 * 1024
-MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "72"))
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("VERCEL") == "1" or os.getenv("COOKIE_SECURE") == "1",
+)
+APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
+DEMO_MODE = os.getenv("DEMO_MODE") == "1" or not os.getenv("SHOPIFY_STORE", "").strip()
+if os.getenv("VERCEL") and not DEMO_MODE and (not APP_PASSWORD or app.secret_key == "development-only-change-me"):
+    raise RuntimeError("Vercel deployments require APP_PASSWORD and a secure SECRET_KEY.")
+
+
+def api_error(message: str, status: int = 400):
+    return jsonify({"error": message}), status
+
+
+def authenticated() -> bool:
+    return not APP_PASSWORD or session.get("authenticated") is True
+
+
+def require_auth(view: Callable[..., Any]):
+    @wraps(view)
+    def wrapped(*args: Any, **kwargs: Any):
+        if not authenticated():
+            return api_error("Authentication required.", 401)
+        return view(*args, **kwargs)
+
+    return wrapped
 
 
 @app.get("/")
 def index():
-    return render_template("index.html", configured=ShopifyClient().configured)
+    if not authenticated():
+        return render_template("login.html")
+    return render_template(
+        "index.html",
+        configured=ShopifyClient().configured or DEMO_MODE,
+        protected=bool(APP_PASSWORD),
+        demo_mode=DEMO_MODE,
+    )
 
 
-@app.post("/jobs")
-def create_job():
-    upload = request.files.get("archive")
-    if not upload or not upload.filename or Path(upload.filename).suffix.casefold() != ".zip":
-        flash("Choose a ZIP archive.", "error")
+@app.post("/login")
+def login():
+    supplied = request.form.get("password", "")
+    if APP_PASSWORD and hmac.compare_digest(supplied, APP_PASSWORD):
+        session.clear()
+        session["authenticated"] = True
         return redirect(url_for("index"))
+    return render_template("login.html", error="Incorrect password."), 401
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("index"))
+
+
+@app.get("/api/products")
+@require_auth
+def products():
+    if DEMO_MODE:
+        return api_error("Demo mode uses a Shopify product CSV selected in the browser.", 503)
     client = ShopifyClient()
-    if not client.configured:
-        flash("Configure the Shopify store and access token first.", "error")
-        return redirect(url_for("index"))
-    job_id = uuid.uuid4().hex
-    job_dir = DATA_DIR / job_id
-    originals, processed = job_dir / "originals", job_dir / "processed"
-    job_dir.mkdir()
-    zip_path = job_dir / secure_filename(upload.filename)
-    upload.save(zip_path)
+    cursor = request.args.get("cursor") or None
     try:
-        products = client.get_products()
-        images = safe_extract_images(zip_path, originals)
-        rows = []
-        for index, source in enumerate(images):
-            output = processed / f"{index:04d}_{Path(source.name).stem}.jpg"
-            try:
-                details = preprocess_image(source, output)
-                suggestions = rank_products(source.name.split("_", 1)[-1], products)
-                top = suggestions[0] if suggestions else None
-                rows.append({
-                    "id": index, "filename": source.name.split("_", 1)[-1], "path": output.name,
-                    "status": "ready", "error": "", "details": details, "suggestions": suggestions,
-                    "selected_product_id": top["id"] if top and top["score"] >= MATCH_THRESHOLD else "",
-                })
-            except ValueError as exc:
-                rows.append({"id": index, "filename": source.name, "status": "invalid", "error": str(exc),
-                             "details": {}, "suggestions": [], "selected_product_id": ""})
-        save_json(job_dir / "job.json", {"id": job_id, "rows": rows})
-    except (ValueError, ShopifyError) as exc:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        flash(str(exc), "error")
-        return redirect(url_for("index"))
-    finally:
-        zip_path.unlink(missing_ok=True)
-    return redirect(url_for("review_job", job_id=job_id))
+        page = client.get_products_page(cursor)
+    except ShopifyError as exc:
+        return api_error(str(exc), 502)
+    return jsonify(page)
 
 
-@app.get("/jobs/<job_id>")
-def review_job(job_id: str):
-    job_path = DATA_DIR / job_id / "job.json"
-    if not job_path.exists():
-        return "Job not found", 404
-    return render_template("review.html", job=load_json(job_path))
+@app.post("/api/staged-uploads")
+@require_auth
+def staged_uploads():
+    if DEMO_MODE:
+        return api_error("Uploads are disabled in demo mode. Add Shopify credentials and set DEMO_MODE=0.", 503)
+    payload = request.get_json(silent=True) or {}
+    files = payload.get("files")
+    if not isinstance(files, list) or not 1 <= len(files) <= 25:
+        return api_error("Provide between 1 and 25 files.")
+    cleaned = []
+    for item in files:
+        if not isinstance(item, dict):
+            return api_error("Invalid file entry.")
+        filename = str(item.get("filename", ""))[:180]
+        size = item.get("size")
+        if not filename or not isinstance(size, int) or size <= 0 or size >= 20 * 1024 * 1024:
+            return api_error("Each file requires a valid filename and must be smaller than 20 MB.")
+        cleaned.append({"filename": filename, "mime_type": "image/jpeg", "size": size})
+    try:
+        targets = ShopifyClient().create_staged_uploads(cleaned)
+    except ShopifyError as exc:
+        return api_error(str(exc), 502)
+    return jsonify({"targets": targets})
 
 
-@app.post("/jobs/<job_id>/upload")
-def upload_job(job_id: str):
-    job_dir = DATA_DIR / job_id
-    job_path = job_dir / "job.json"
-    if not job_path.exists():
-        return "Job not found", 404
-    job = load_json(job_path)
-    client = ShopifyClient()
-    uploaded = failed = 0
-    for row in job["rows"]:
-        product_id = request.form.get(f"product_{row['id']}", "").strip()
-        row["selected_product_id"] = product_id
-        if row["status"] not in {"ready", "failed"} or not product_id:
-            continue
-        try:
-            client.upload_product_image(product_id, job_dir / "processed" / row["path"], Path(row["filename"]).stem)
-            row["status"], row["error"] = "uploaded", ""
-            uploaded += 1
-        except (ShopifyError, OSError) as exc:
-            row["status"], row["error"] = "failed", str(exc)
-            failed += 1
-    save_json(job_path, job)
-    flash(f"Uploaded {uploaded} image(s); {failed} failed.", "success" if not failed else "error")
-    return redirect(url_for("review_job", job_id=job_id))
+@app.post("/api/attach-image")
+@require_auth
+def attach_image():
+    if DEMO_MODE:
+        return api_error("Uploads are disabled in demo mode.", 503)
+    payload = request.get_json(silent=True) or {}
+    product_id = str(payload.get("product_id", ""))
+    resource_url = str(payload.get("resource_url", ""))
+    alt = str(payload.get("alt", ""))[:512]
+    if not product_id.startswith("gid://shopify/Product/"):
+        return api_error("Invalid product ID.")
+    if not resource_url.startswith("https://"):
+        return api_error("Invalid staged resource URL.")
+    try:
+        ShopifyClient().attach_product_image(product_id, resource_url, alt)
+    except ShopifyError as exc:
+        return api_error(str(exc), 502)
+    return jsonify({"ok": True})
 
 
-@app.errorhandler(413)
-def too_large(_error):
-    return render_template("index.html", configured=ShopifyClient().configured,
-                           upload_error="The ZIP exceeds the configured upload limit."), 413
+@app.get("/api/health")
+def health():
+    return jsonify({"ok": True, "shopify_configured": ShopifyClient().configured, "demo_mode": DEMO_MODE})
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
-
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=os.getenv("FLASK_DEBUG") == "1")

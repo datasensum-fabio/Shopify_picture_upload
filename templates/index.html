@@ -1,27 +1,73 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero">
-  <p class="eyebrow">BULK PRODUCT MEDIA</p>
-  <h1>Match every image to the right Shopify product.</h1>
-  <p class="lead">Upload one ZIP. Images are resized, converted to JPEG, compared against product titles, handles, SKUs and barcodes, then held for your approval.</p>
+<section class="hero compact">
+  <div>
+    <p class="eyebrow">LOCAL-FIRST PRODUCT MEDIA</p>
+    <h1>Match locally.<br>Upload directly.</h1>
+    <p class="lead">Your ZIP and images stay on this computer. Only product metadata and upload confirmations pass through this app.</p>
+  </div>
+  {% if protected %}<form method="post" action="{{ url_for('logout') }}"><button class="secondary" type="submit">Sign out</button></form>{% endif %}
 </section>
-{% if upload_error %}<div class="notice error">{{ upload_error }}</div>{% endif %}
-<section class="card upload-card">
-  <div><span class="step">01</span><h2>Choose your image archive</h2></div>
-  <form method="post" action="{{ url_for('create_job') }}" enctype="multipart/form-data">
-    <label class="dropzone">
-      <input type="file" name="archive" accept=".zip,application/zip" required>
-      <strong>Drop a ZIP here or click to browse</strong>
-      <span>Up to 500 MB by default</span>
-    </label>
-    <button type="submit" {% if not configured %}disabled{% endif %}>Analyse images</button>
-  </form>
-  {% if not configured %}<p class="warning">Shopify credentials are not configured. Copy <code>.env.example</code> to <code>.env</code> first.</p>{% endif %}
-</section>
-<section class="features">
-  <article><span>02</span><h3>Smart matching</h3><p>Exact SKU and barcode matches lead; fuzzy title and handle matches provide ranked alternatives.</p></article>
-  <article><span>03</span><h3>Human review</h3><p>Ambiguous results remain unselected, so nothing is attached to the wrong product silently.</p></article>
-  <article><span>04</span><h3>Safe upload</h3><p>Orientation, dimensions, megapixels, format and file size are normalized before staged upload.</p></article>
-</section>
-{% endblock %}
 
+{% if not configured %}
+<div class="notice error">Shopify is not configured. Add the required environment variables before continuing.</div>
+{% endif %}
+{% if demo_mode %}
+<div class="notice demo">Demo mode is active. Select a Shopify product CSV below; matching uses its real product handles locally. Uploading to Shopify remains disabled.</div>
+{% endif %}
+
+<section id="start-card" class="card">
+  <div class="section-title"><span class="step">01</span><div><h2>Select the Shopify product CSV</h2><p>Export products from Shopify. The CSV stays in this browser and supplies handles, titles, SKUs and barcodes.</p></div></div>
+  <label class="file-row"><span>Shopify product CSV</span><input id="catalog" type="file" accept=".csv,text/csv" {% if demo_mode %}required{% endif %}></label>
+  <div class="section-title archive-title"><span class="step">02</span><div><h2>Select one or more ZIP archives</h2><p>ZIP64 archives are supported. Large files are read incrementally and are never sent to Vercel.</p></div></div>
+  <label class="dropzone" id="dropzone">
+    <input id="archive" type="file" accept=".zip,application/zip" multiple {% if not configured %}disabled{% endif %}>
+    <strong>Drop ZIP files here or click to browse</strong>
+    <span>Up to 10 GB per archive · desktop Chrome or Edge recommended above 2 GB</span>
+  </label>
+  <div id="start-actions" class="inline-actions hidden">
+    <div id="file-summary"></div>
+    <button id="analyse" type="button">Analyse locally</button>
+  </div>
+</section>
+
+<section id="working" class="card hidden" aria-live="polite">
+  <div class="section-title"><span class="step">02</span><div><h2 id="working-title">Reading archive</h2><p id="working-detail">Preparing the local job…</p></div></div>
+  <progress id="progress" max="100" value="0"></progress>
+</section>
+
+<section id="review" class="hidden">
+  <div class="review-head">
+    <div><p class="eyebrow">03 · REVIEW</p><h2>Confirm matches</h2></div>
+    <div id="summary" class="summary-grid"></div>
+  </div>
+  <div class="filters">
+    <button type="button" class="filter active" data-filter="all">All</button>
+    <button type="button" class="filter" data-filter="auto_approved">Auto-approved</button>
+    <button type="button" class="filter" data-filter="needs_review">Needs review</button>
+    <button type="button" class="filter" data-filter="no_match">No match</button>
+    <button type="button" class="filter" data-filter="failed">Failed</button>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Picture name</th><th>Matched Shopify handle</th><th>Product choice</th><th>Confidence</th><th>Decision</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+  <div class="actionbar">
+    <div><strong id="upload-count">0 images selected</strong><small>Images are processed and uploaded one at a time.</small></div>
+    <div class="inline-actions"><button id="reset" class="secondary" type="button">Start over</button><button id="upload" type="button" {% if demo_mode %}disabled title="Uploads are disabled in demo mode"{% endif %}>Process and upload</button></div>
+  </div>
+</section>
+
+<template id="row-template">
+  <tr>
+    <td><strong class="filename"></strong><small class="archive-name"></small><small class="row-error"></small></td>
+    <td><strong class="product-handle"></strong></td>
+    <td><select class="product-select"><option value="">Skip / no product</option></select></td>
+    <td><span class="score"></span><small class="matched-on"></small></td>
+    <td><span class="match-status"></span><small class="upload-status"></small></td>
+  </tr>
+</template>
+
+<script>window.APP_CONFIG = {{ {"demoMode": demo_mode}|tojson }};</script>
+<script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

@@ -1,4 +1,5 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
+import { filenameKeys, normalize, parseProductCode, productCodeKey, similarity } from "./matching.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -16,43 +17,27 @@ const ALLOWED = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic)$/i;
 const DEMO_MODE = Boolean(window.APP_CONFIG?.demoMode);
 
 const $ = (selector) => document.querySelector(selector);
-const state = { files: [], catalogFile: null, readers: [], products: [], exactIndex: new Map(), rows: [], running: false, filter: "all" };
-
-function normalize(value) {
-  return value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
-}
-
-function filenameKeys(filename) {
-  const stem = filename.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
-  const withoutPhotoSuffix = stem.replace(/(?:[-_\s]+(?:front|back|side|detail|main|hero|image|img|photo|\d+|[a-z]))+$/i, "");
-  return [...new Set([normalize(stem), normalize(withoutPhotoSuffix)].filter(Boolean))];
-}
-
-function levenshtein(a, b) {
-  if (a.length > b.length) [a, b] = [b, a];
-  let previous = Array.from({ length: a.length + 1 }, (_, i) => i);
-  for (let j = 1; j <= b.length; j++) {
-    const current = [j];
-    for (let i = 1; i <= a.length; i++) {
-      current[i] = Math.min(current[i - 1] + 1, previous[i] + 1, previous[i - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    }
-    previous = current;
-  }
-  return previous[a.length];
-}
-
-function similarity(a, b) {
-  if (!a || !b) return 0;
-  if (a === b) return 100;
-  const edit = 100 * (1 - levenshtein(a, b) / Math.max(a.length, b.length));
-  const contained = (a.includes(b) || b.includes(a)) && Math.min(a.length, b.length) >= 5
-    ? 88 + 8 * Math.min(a.length, b.length) / Math.max(a.length, b.length)
-    : 0;
-  return Math.max(edit, contained);
-}
+const state = { files: [], catalogFile: null, readers: [], products: [], exactIndex: new Map(), codeIndex: new Map(), rows: [], running: false, filter: "all" };
 
 function rankProducts(filename) {
   const needles = filenameKeys(filename);
+  const pictureCode = parseProductCode(filename);
+  if (pictureCode) {
+    const structured = state.codeIndex.get(productCodeKey(pictureCode)) || [];
+    return structured.map((product) => {
+      const productCode = parseProductCode(product.handle);
+      const textScore = Math.max(...needles.map((needle) => similarity(needle, normalize(product.handle))));
+      let score = Math.max(80, textScore);
+      if (pictureCode.extra === productCode.extra) score = Math.max(score, pictureCode.extra ? 100 : 96);
+      else if (!pictureCode.extra || !productCode.extra) score = Math.max(score, 92);
+      return {
+        id: product.id, title: product.title, handle: product.handle,
+        score: Math.round(score * 10) / 10,
+        matched_on: "category + product number",
+        matched_value: `${pictureCode.category}${pictureCode.number}`,
+      };
+    }).sort((a, b) => b.score - a.score).slice(0, 5);
+  }
   const exact = new Map();
   for (const needle of needles) {
     for (const candidate of state.exactIndex.get(needle) || []) exact.set(candidate.id, candidate);
@@ -75,7 +60,14 @@ function rankProducts(filename) {
 
 function buildCatalogIndex() {
   state.exactIndex = new Map();
+  state.codeIndex = new Map();
   for (const product of state.products) {
+    const code = parseProductCode(product.handle || "");
+    if (code) {
+      const codeKey = productCodeKey(code);
+      if (!state.codeIndex.has(codeKey)) state.codeIndex.set(codeKey, []);
+      state.codeIndex.get(codeKey).push(product);
+    }
     const values = [["handle", product.handle || ""], ["title", product.title || ""]];
     for (const variant of product.variants?.nodes || []) values.push(["sku", variant.sku || ""], ["barcode", variant.barcode || ""]);
     for (const [field, value] of values) {

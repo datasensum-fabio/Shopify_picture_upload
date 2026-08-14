@@ -26,6 +26,15 @@ There is no server-side job directory, ZIP upload or image processing. A small
 manifest in browser local storage records selections and completed uploads. To
 resume after closing the page, select the same archives again.
 
+### Structured product-code matching
+
+When a picture name begins with letters followed by digits, the letters are the
+product category and the digits are the product number. Both must match the
+Shopify handle before a product can be suggested. Leading zeros inside the number
+are ignored (`CLR0006` matches `CLR06`), but digit values are never truncated
+(`CLR0006` does not match `CLR060`). Any remaining text is treated as an optional
+extra code and is used to rank products that share the required category and number.
+
 ## Archive limits
 
 - 10 GB per ZIP safety cap; multiple ZIPs can form one job.

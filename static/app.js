@@ -84,6 +84,25 @@ function decorateSuggestions(suggestions, filename) {
   });
 }
 
+function productChoiceLabel(suggestion, pictureMetal) {
+  const product = state.products.find((item) => item.id === suggestion.id);
+  const allVariants = product?.variants?.nodes || [];
+  const matchingVariants = pictureMetal
+    ? allVariants.filter((variant) => variantMetal(variant)?.code === pictureMetal.code)
+    : allVariants;
+  const variants = matchingVariants.length ? matchingVariants : allVariants;
+  const unique = (values) => [...new Set(values.filter(Boolean))];
+  const metals = unique(variants.map((variant) => variantMetal(variant)?.code));
+  const barcodes = unique(variants.map((variant) => variant.barcode));
+  const skus = unique(variants.map((variant) => variant.sku));
+  return [
+    suggestion.handle,
+    metals.join(", ") || "Metal not specified",
+    barcodes.join(", ") || "No barcode",
+    skus.join(", ") || "No SKU",
+  ].join(" - ");
+}
+
 function buildCatalogIndex() {
   state.exactIndex = new Map();
   state.codeIndex = new Map();
@@ -282,7 +301,8 @@ function render() {
   const tbody = $("#rows");
   tbody.replaceChildren();
   for (const row of state.rows) {
-    if (state.filter !== "all" && row.matchStatus !== state.filter && row.uploadStatus !== state.filter && !(state.filter === "duplicate" && row.isDuplicate)) continue;
+    const effectiveMatchStatus = row.isDuplicate ? "duplicate" : row.matchStatus;
+    if (state.filter !== "all" && effectiveMatchStatus !== state.filter && row.uploadStatus !== state.filter) continue;
     const fragment = $("#row-template").content.cloneNode(true);
     const tr = fragment.querySelector("tr");
     tr.dataset.id = row.id;
@@ -303,7 +323,7 @@ function render() {
     for (const product of row.suggestions) {
       const option = document.createElement("option");
       option.value = product.id;
-      option.textContent = `${product.title} — ${product.matched_on}: ${product.matched_value} (${product.score}%)`;
+      option.textContent = productChoiceLabel(product, row.pictureMetal);
       option.selected = product.id === row.selectedId;
       select.append(option);
     }

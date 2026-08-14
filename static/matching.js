@@ -23,8 +23,14 @@ export function parseProductCode(value) {
   const match = stem.match(/^([a-z]+)[\s_-]*0*(\d+)(.*)$/i);
   if (!match) return null;
   const metal = detectMetal(stem);
-  let extra = (match[3].match(/^([a-z]+)/i)?.[1] || "").toLowerCase();
-  if (metal && extra.endsWith(metal.matchedKey)) extra = extra.slice(0, -metal.matchedKey.length);
+  let attached = match[3].match(/^([a-z0-9]+)/i)?.[1] || "";
+  if (metal) {
+    const normalizedAttached = normalize(attached);
+    if (normalizedAttached.endsWith(metal.matchedKey)) {
+      attached = normalizedAttached.slice(0, -metal.matchedKey.length);
+    }
+  }
+  const extra = normalize(attached.match(/^([a-z]+)/i)?.[1] || "");
   return {
     category: match[1].toUpperCase(),
     number: match[2].replace(/^0+(?=\d)/, ""),

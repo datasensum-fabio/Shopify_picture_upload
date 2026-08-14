@@ -28,6 +28,9 @@ assert.equal(cleanFilename("CLR0006_1.jpg"), "CLR0006");
 assert.equal(productCodeKey(parseProductCode("CLR0006 bracelet (1).jpg")), productCodeKey(parseProductCode("CLR06")));
 assert.equal(parseProductCode("SKS6667TP bracelet SIL 2.jpg").extra, "tp");
 assert.equal(parseProductCode("SKS6667TPSIL-1.jpg").extra, "tp");
+assert.equal(parseProductCode("CP004YW9.jpg").extra, "");
+assert.equal(parseProductCode("CLR012R9.jpg").extra, "");
+assert.equal(parseProductCode("KS6076Y9.jpg").extra, "");
 assert.equal(detectMetal("SKS6667TP SIL (1).jpg").code, "SIL");
 
 console.log("Structured product-code tests passed.");

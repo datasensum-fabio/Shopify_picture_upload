@@ -1,5 +1,5 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
-import { filenameKeys, normalize, parseProductCode, productCodeKey, similarity } from "./matching.js";
+import { detectMetal, filenameKeys, normalize, parseProductCode, productCodeKey, similarity } from "./matching.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -24,7 +24,7 @@ function rankProducts(filename) {
   const pictureCode = parseProductCode(filename);
   if (pictureCode) {
     const structured = state.codeIndex.get(productCodeKey(pictureCode)) || [];
-    return structured.map((product) => {
+    return decorateSuggestions(structured.map((product) => {
       const productCode = parseProductCode(product.handle);
       const textScore = Math.max(...needles.map((needle) => similarity(needle, normalize(product.handle))));
       let score = Math.max(80, textScore);
@@ -36,14 +36,14 @@ function rankProducts(filename) {
         matched_on: "category + product number",
         matched_value: `${pictureCode.category}${pictureCode.number}`,
       };
-    }).sort((a, b) => b.score - a.score).slice(0, 5);
+    }).sort((a, b) => b.score - a.score).slice(0, 5), filename);
   }
   const exact = new Map();
   for (const needle of needles) {
     for (const candidate of state.exactIndex.get(needle) || []) exact.set(candidate.id, candidate);
   }
-  if (exact.size) return [...exact.values()].sort((a, b) => a.title.localeCompare(b.title)).slice(0, 5);
-  return state.products.map((product) => {
+  if (exact.size) return decorateSuggestions([...exact.values()].sort((a, b) => a.title.localeCompare(b.title)).slice(0, 5), filename);
+  return decorateSuggestions(state.products.map((product) => {
     const candidates = [["handle", product.handle || ""], ["title", product.title || ""]];
     let best = { score: 0, matched_on: "", matched_value: "" };
     for (const [field, raw] of candidates) {
@@ -55,7 +55,30 @@ function rankProducts(filename) {
       }
     }
     return { id: product.id, title: product.title, handle: product.handle, ...best, score: Math.round(best.score * 10) / 10 };
-  }).sort((a, b) => b.score - a.score).slice(0, 5);
+  }).sort((a, b) => b.score - a.score).slice(0, 5), filename);
+}
+
+function variantMetal(variant) {
+  if (variant.metal) return variant.metal;
+  const optionText = (variant.selectedOptions || []).map((option) => option.value).join(" ");
+  return detectMetal(`${optionText} ${variant.title || ""} ${variant.sku || ""}`);
+}
+
+function decorateSuggestions(suggestions, filename) {
+  const pictureMetal = detectMetal(filename);
+  return suggestions.map((suggestion) => {
+    const product = state.products.find((item) => item.id === suggestion.id);
+    const variants = product?.variants?.nodes || [];
+    const metalVariants = pictureMetal ? variants.filter((variant) => variantMetal(variant)?.code === pictureMetal.code) : [];
+    const availableMetals = [...new Set(variants.map((variant) => variantMetal(variant)?.code).filter(Boolean))];
+    return {
+      ...suggestion,
+      picture_metal: pictureMetal,
+      variant_ids: metalVariants.map((variant) => variant.id),
+      variant_titles: metalVariants.map((variant) => variant.title || variant.sku || variant.id),
+      available_metals: availableMetals,
+    };
+  });
 }
 
 function buildCatalogIndex() {
@@ -79,8 +102,9 @@ function buildCatalogIndex() {
   }
 }
 
-function classify(suggestions) {
+function classify(suggestions, pictureMetal = null) {
   if (!suggestions.length || suggestions[0].score < REVIEW_SCORE) return "no_match";
+  if (pictureMetal && !suggestions[0].variant_ids.length) return "needs_review";
   const gap = suggestions[0].score - (suggestions[1]?.score || 0);
   return suggestions[0].score >= AUTO_SCORE && gap >= MIN_GAP ? "auto_approved" : "needs_review";
 }
@@ -134,6 +158,8 @@ async function loadCsvCatalog(file) {
   const column = (name) => headers.indexOf(name);
   const handleColumn = column("Handle"), titleColumn = column("Title");
   const skuColumn = column("Variant SKU"), barcodeColumn = column("Variant Barcode");
+  const variantIdColumn = column("Variant ID");
+  const optionColumns = [1, 2, 3].map((number) => ({ name: column(`Option${number} Name`), value: column(`Option${number} Value`) }));
   if (handleColumn < 0 || titleColumn < 0) throw new Error('The product CSV must contain the Shopify columns "Handle" and "Title".');
   const products = new Map();
   for (const values of records.slice(1)) {
@@ -145,7 +171,16 @@ async function loadCsvCatalog(file) {
     });
     const sku = skuColumn >= 0 ? (values[skuColumn] || "").trim() : "";
     const barcode = barcodeColumn >= 0 ? (values[barcodeColumn] || "").trim() : "";
-    if (sku || barcode) products.get(handle).variants.nodes.push({ sku, barcode });
+    const selectedOptions = optionColumns.filter((item) => item.name >= 0 && item.value >= 0 && values[item.value]).map((item) => ({
+      name: values[item.name] || "Option", value: values[item.value],
+    }));
+    const metal = detectMetal(`${selectedOptions.map((item) => item.value).join(" ")} ${sku}`);
+    const variantIndex = products.get(handle).variants.nodes.length + 1;
+    products.get(handle).variants.nodes.push({
+      id: variantIdColumn >= 0 && values[variantIdColumn] ? values[variantIdColumn] : `csv://Variant/${encodeURIComponent(handle)}/${variantIndex}`,
+      title: selectedOptions.map((item) => item.value).join(" / ") || sku || `Variant ${variantIndex}`,
+      sku, barcode, selectedOptions, metal,
+    });
   }
   if (!products.size) throw new Error("No products with handles were found in the Shopify CSV.");
   return [...products.values()];
@@ -206,12 +241,15 @@ async function analyse() {
         if (expanded > MAX_EXPANDED_BYTES) throw new Error(`The archives expand beyond ${formatBytes(MAX_EXPANDED_BYTES)}.`);
         if (entry.compressedSize && entry.uncompressedSize / entry.compressedSize > MAX_RATIO) throw new Error(`${entry.filename} has an unsafe compression ratio.`);
         const suggestions = rankProducts(entry.filename);
-        const matchStatus = classify(suggestions);
+        const pictureMetal = detectMetal(entry.filename);
+        const matchStatus = classify(suggestions, pictureMetal);
         state.rows.push({
           id: `${fileIndex}:${entry.index ?? state.rows.length}`,
           fileIndex, entry, filename: entry.filename.replace(/^.*[\\/]/, ""),
           archive: file.name, suggestions, matchStatus,
           selectedId: matchStatus === "auto_approved" ? suggestions[0].id : "",
+          pictureMetal,
+          selectedVariantIds: matchStatus === "auto_approved" ? suggestions[0].variant_ids : [],
           uploadStatus: "pending", error: "",
         });
       }
@@ -244,6 +282,15 @@ function render() {
     fragment.querySelector(".archive-name").textContent = row.archive;
     const handle = fragment.querySelector(".product-handle");
     handle.textContent = row.suggestions.find((item) => item.id === row.selectedId)?.handle || row.suggestions[0]?.handle || "—";
+    const metalMatch = fragment.querySelector(".metal-match");
+    const updateMetalMatch = () => {
+      const suggestion = row.suggestions.find((item) => item.id === row.selectedId) || row.suggestions[0];
+      row.selectedVariantIds = suggestion?.variant_ids || [];
+      if (!row.pictureMetal) metalMatch.textContent = "Not specified in picture name";
+      else if (row.selectedVariantIds.length) metalMatch.textContent = `${row.pictureMetal.code} — ${row.selectedVariantIds.length} matching variant${row.selectedVariantIds.length === 1 ? "" : "s"}`;
+      else metalMatch.textContent = `${row.pictureMetal.code} — no matching variant`;
+    };
+    updateMetalMatch();
     const select = fragment.querySelector(".product-select");
     for (const product of row.suggestions) {
       const option = document.createElement("option");
@@ -257,6 +304,7 @@ function render() {
       row.selectedId = select.value;
       if (select.value && row.matchStatus === "no_match") row.matchStatus = "needs_review";
       handle.textContent = row.suggestions.find((item) => item.id === select.value)?.handle || "—";
+      updateMetalMatch();
       persistManifest(); renderSummary();
     });
     const top = row.suggestions[0];
@@ -340,7 +388,7 @@ async function uploadAll() {
         const safeName = row.filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 150) + ".jpg";
         const { targets } = await api("/api/staged-uploads", { method: "POST", body: JSON.stringify({ files: [{ filename: safeName, size: blob.size }] }) });
         await uploadTarget(targets[0], blob, safeName);
-        await api("/api/attach-image", { method: "POST", body: JSON.stringify({ product_id: row.selectedId, resource_url: targets[0].resourceUrl, alt: row.filename.replace(/\.[^.]+$/, "") }) });
+        await api("/api/attach-image", { method: "POST", body: JSON.stringify({ product_id: row.selectedId, variant_ids: row.selectedVariantIds, resource_url: targets[0].resourceUrl, alt: row.filename.replace(/\.[^.]+$/, "") }) });
         row.uploadStatus = "uploaded";
       } catch (error) {
         row.uploadStatus = "failed"; row.error = error.message;

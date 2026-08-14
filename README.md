@@ -35,6 +35,18 @@ are ignored (`CLR0006` matches `CLR06`), but digit values are never truncated
 (`CLR0006` does not match `CLR060`). Any remaining text is treated as an optional
 extra code and is used to rank products that share the required category and number.
 
+### Metal and variant matching
+
+If a known metal code or description appears at the very end of the picture name,
+the matcher selects the Shopify variants with that metal. A separator is optional,
+so `SKS6667TPSIL.jpg` and `SKS6667TP SIL.jpg` both detect `SIL`. The CSV importer
+reads all three Shopify option name/value pairs plus SKU and barcode. Codes are
+matched longest-first so composite metals such as `GF R`, `RYW9`, `SILVER/ROSE`,
+and `9CT/SILVER` are not reduced to a shorter code. If the picture specifies a
+metal but the selected product has no matching variant, the row requires review.
+When live Shopify access is enabled, the uploaded product media is associated with
+every matching variant (for example, all sizes sharing the same metal).
+
 ## Archive limits
 
 - 10 GB per ZIP safety cap; multiple ZIPs can form one job.

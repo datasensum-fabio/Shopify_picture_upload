@@ -117,14 +117,20 @@ def attach_image():
         return api_error("Uploads are disabled in demo mode.", 503)
     payload = request.get_json(silent=True) or {}
     product_id = str(payload.get("product_id", ""))
+    variant_ids = payload.get("variant_ids") or []
     resource_url = str(payload.get("resource_url", ""))
     alt = str(payload.get("alt", ""))[:512]
     if not product_id.startswith("gid://shopify/Product/"):
         return api_error("Invalid product ID.")
+    if not isinstance(variant_ids, list) or len(variant_ids) > 100 or any(
+        not isinstance(variant_id, str) or not variant_id.startswith("gid://shopify/ProductVariant/")
+        for variant_id in variant_ids
+    ):
+        return api_error("Invalid product variant selection.")
     if not resource_url.startswith("https://"):
         return api_error("Invalid staged resource URL.")
     try:
-        ShopifyClient().attach_product_image(product_id, resource_url, alt)
+        ShopifyClient().attach_product_image(product_id, resource_url, alt, variant_ids)
     except ShopifyError as exc:
         return api_error(str(exc), 502)
     return jsonify({"ok": True})

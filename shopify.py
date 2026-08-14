@@ -65,7 +65,7 @@ class ShopifyClient:
           products(first: 50, after: $cursor) {
             nodes {
               id title handle status
-              variants(first: 100) { nodes { id title sku barcode } }
+              variants(first: 100) { nodes { id title sku barcode selectedOptions { name value } } }
             }
             pageInfo { hasNextPage endCursor }
           }
@@ -98,11 +98,11 @@ class ShopifyClient:
             raise ShopifyError(str(staged["userErrors"]))
         return staged["stagedTargets"]
 
-    def attach_product_image(self, product_id: str, resource_url: str, alt: str) -> None:
+    def attach_product_image(self, product_id: str, resource_url: str, alt: str, variant_ids: list[str] | None = None) -> None:
         attach_query = """
         mutation Attach($product: ProductUpdateInput!, $media: [CreateMediaInput!]) {
           productUpdate(product: $product, media: $media) {
-            product { id }
+            product { id media(first: 10, reverse: true) { nodes { id alt } } }
             mediaUserErrors { field message }
             userErrors { field message }
           }
@@ -115,4 +115,22 @@ class ShopifyClient:
         errors = result.get("mediaUserErrors", []) + result.get("userErrors", [])
         if errors:
             raise ShopifyError(str(errors))
+        if variant_ids:
+            media_nodes = result.get("product", {}).get("media", {}).get("nodes", [])
+            media = next((item for item in media_nodes if item.get("alt") == alt), None)
+            if not media:
+                raise ShopifyError("Shopify created the product image but did not return its media ID for variant association.")
+            append_query = """
+            mutation AppendVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+              productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+                userErrors { field message }
+              }
+            }
+            """
+            appended = self.graphql(append_query, {
+                "productId": product_id,
+                "variantMedia": [{"variantId": variant_id, "mediaIds": [media["id"]]} for variant_id in variant_ids],
+            })["productVariantAppendMedia"]
+            if appended.get("userErrors"):
+                raise ShopifyError(str(appended["userErrors"]))
 

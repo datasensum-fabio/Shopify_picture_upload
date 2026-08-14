@@ -73,6 +73,16 @@ const METAL_ALIASES = METALS.flatMap(([code, description]) => [
   { code, description, key: normalize(description) },
 ]).sort((a, b) => b.key.length - a.key.length);
 
+const METAL_CODE_TOKENS = METALS.map(([code, description]) => ({
+  code,
+  description,
+  key: normalize(code),
+  pattern: new RegExp(`(?:^|[\\s_-])${code.split("").map((char) => {
+    if (/\s/.test(char)) return "[\\s_-]+";
+    return char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }).join("")}(?=$|[\\s_-])`, "i"),
+})).sort((a, b) => b.key.length - a.key.length);
+
 export function detectMetal(value) {
   let cleaned = value.replace(/\.[^.]+$/, "").trim();
   let previous;
@@ -83,6 +93,9 @@ export function detectMetal(value) {
   const normalized = normalize(cleaned);
   for (const metal of METAL_ALIASES) {
     if (normalized.endsWith(metal.key)) return { code: metal.code, description: metal.description, matchedKey: metal.key };
+  }
+  for (const metal of METAL_CODE_TOKENS) {
+    if (metal.pattern.test(cleaned)) return { code: metal.code, description: metal.description, matchedKey: metal.key };
   }
   return null;
 }

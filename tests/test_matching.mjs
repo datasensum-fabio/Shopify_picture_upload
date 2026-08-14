@@ -32,5 +32,8 @@ assert.equal(parseProductCode("CP004YW9.jpg").extra, "");
 assert.equal(parseProductCode("CLR012R9.jpg").extra, "");
 assert.equal(parseProductCode("KS6076Y9.jpg").extra, "");
 assert.equal(detectMetal("SKS6667TP SIL (1).jpg").code, "SIL");
+assert.equal(detectMetal("Dp001Dia W9 sub2.jpg").code, "W9");
+assert.equal(parseProductCode("Dp001Dia W9 sub2.jpg").extra, "dia");
+assert.equal(detectMetal("SILVER bracelet.jpg"), null);
 
 console.log("Structured product-code tests passed.");

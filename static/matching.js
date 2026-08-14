@@ -2,20 +2,33 @@ export function normalize(value) {
   return value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
 }
 
+export function cleanFilename(value) {
+  let stem = value.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "").trim();
+  let previous;
+  do {
+    previous = stem;
+    stem = stem.replace(/(?:\s*\(\d+\)|[\s_-]+\d+)\s*$/i, "").trim();
+  } while (stem !== previous);
+  return stem;
+}
+
 export function filenameKeys(filename) {
-  const stem = filename.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  const stem = cleanFilename(filename);
   const withoutPhotoSuffix = stem.replace(/(?:[-_\s]+(?:front|back|side|detail|main|hero|image|img|photo|\d+|[a-z]))+$/i, "");
   return [...new Set([normalize(stem), normalize(withoutPhotoSuffix)].filter(Boolean))];
 }
 
 export function parseProductCode(value) {
-  const stem = value.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "").trim();
+  const stem = cleanFilename(value);
   const match = stem.match(/^([a-z]+)[\s_-]*0*(\d+)(.*)$/i);
   if (!match) return null;
+  const metal = detectMetal(stem);
+  let extra = (match[3].match(/^([a-z]+)/i)?.[1] || "").toLowerCase();
+  if (metal && extra.endsWith(metal.matchedKey)) extra = extra.slice(0, -metal.matchedKey.length);
   return {
     category: match[1].toUpperCase(),
     number: match[2].replace(/^0+(?=\d)/, ""),
-    extra: normalize(match[3]),
+    extra: normalize(extra),
   };
 }
 
@@ -55,9 +68,15 @@ const METAL_ALIASES = METALS.flatMap(([code, description]) => [
 ]).sort((a, b) => b.key.length - a.key.length);
 
 export function detectMetal(value) {
-  const normalized = normalize(value.replace(/\.[^.]+$/, ""));
+  let cleaned = value.replace(/\.[^.]+$/, "").trim();
+  let previous;
+  do {
+    previous = cleaned;
+    cleaned = cleaned.replace(/(?:\s*\(\d+\)|[\s_-]+\d+)\s*$/i, "").trim();
+  } while (cleaned !== previous);
+  const normalized = normalize(cleaned);
   for (const metal of METAL_ALIASES) {
-    if (normalized.endsWith(metal.key)) return { code: metal.code, description: metal.description };
+    if (normalized.endsWith(metal.key)) return { code: metal.code, description: metal.description, matchedKey: metal.key };
   }
   return null;
 }

@@ -47,6 +47,15 @@ metal but the selected product has no matching variant, the row requires review.
 When live Shopify access is enabled, the uploaded product media is associated with
 every matching variant (for example, all sizes sharing the same metal).
 
+### Filename noise
+
+Trailing copy counters separated from the product code are removed before matching,
+including ` 1`, ` 2`, ` (1)`, `-1`, and `_1`. Descriptive words such as a product
+type, colour, or stone name do not participate in the mandatory category/number
+comparison. Optional extra codes are read only when attached directly to the product
+number. Metal detection runs after copy-counter cleanup and still requires the metal
+to be the final meaningful part of the name.
+
 ## Archive limits
 
 - 10 GB per ZIP safety cap; multiple ZIPs can form one job.

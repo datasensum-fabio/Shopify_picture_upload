@@ -138,7 +138,7 @@ def attach_image():
     mode = str(payload.get("mode", "add"))
     if not product_id.startswith("gid://shopify/Product/"):
         return api_error("Invalid product ID.")
-    if not isinstance(variant_ids, list) or len(variant_ids) > 100 or any(
+    if not isinstance(variant_ids, list) or len(variant_ids) > 2048 or any(
         not isinstance(variant_id, str) or not variant_id.startswith("gid://shopify/ProductVariant/")
         for variant_id in variant_ids
     ):

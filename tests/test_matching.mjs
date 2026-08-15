@@ -40,5 +40,13 @@ assert.equal(await sha256Hex(new Blob(["same image bytes"])), await sha256Hex(ne
 assert.notEqual(await sha256Hex(new Blob(["same image bytes"])), await sha256Hex(new Blob(["different image bytes"])));
 assert.equal(visualFingerprintsMatch({ pixels: [10, 20, 30], hash: [0, 1] }, { pixels: [12, 22, 32], hash: [0, 1] }), true);
 assert.equal(visualFingerprintsMatch({ pixels: [10, 20, 30], hash: [0, 1] }, { pixels: [40, 50, 60], hash: [1, 0] }), false);
+assert.equal(visualFingerprintsMatch(
+  { pixels: [10, 20, 30], hash: [0, 0, 0, 0, 0, 0, 0, 0] },
+  { pixels: [10, 20, 30], hash: [1, 1, 1, 1, 0, 0, 0, 0] },
+), true);
+assert.equal(visualFingerprintsMatch(
+  { pixels: [10, 20, 30], hash: [0, 0, 0, 0, 0, 0, 0, 0] },
+  { pixels: [10, 20, 30], hash: [1, 1, 1, 1, 1, 0, 0, 0] },
+), false);
 
 console.log("Structured product-code tests passed.");

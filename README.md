@@ -45,7 +45,33 @@ matched longest-first so composite metals such as `GF R`, `RYW9`, `SILVER/ROSE`,
 and `9CT/SILVER` are not reduced to a shorter code. If the picture specifies a
 metal but the selected product has no matching variant, the row requires review.
 When live Shopify access is enabled, the uploaded product media is associated with
-every matching variant (for example, all sizes sharing the same metal).
+every matching variant (for example, all sizes sharing the same metal). The UI
+shows one representative variant in the product dropdown, but the uploader sends
+all matching variant IDs to Shopify in batches of 100.
+
+## Manual Shopify CSV import
+
+The review screen can generate a Shopify-compatible product CSV for the rows set
+to **Add** or **Replace**. Shopify product CSV files contain text only, so the ZIP
+images must first be uploaded to a public image host such as Shopify Content >
+Files or ImageKit. Export that image library as a CSV containing `Name` (or
+`Filename`) and `URL` columns, then select it under **Manual Shopify CSV import**.
+
+The generated CSV contains the complete original export rows for affected products,
+preserves their variant data, retains existing images for **Add**, and associates
+the new image with every matching variant row. For **Replace**, it outputs only the
+chosen replacement image for that product. Before importing:
+
+1. Export a fresh Shopify product backup.
+2. Confirm every selected image has a unique filename and a public HTTPS URL.
+3. Download the generated CSV.
+4. In Shopify's product importer, select **Overwrite products with matching handles**.
+5. Test one product before importing the full file, especially for **Replace**.
+
+Shopify CSV supports only one featured `Variant Image` per variant. If multiple
+new pictures target the same variant, all are retained as product images and the
+first is used as that variant's featured image. Direct API upload does not have
+this CSV limitation.
 
 ### Filename noise
 

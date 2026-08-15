@@ -58,6 +58,12 @@
     <div><strong id="upload-count">0 images selected</strong><small>Images are processed and uploaded one at a time.</small></div>
     <div class="inline-actions"><button id="reset" class="secondary" type="button">Start over</button><button id="upload" type="button" {% if demo_mode %}disabled title="Uploads are disabled in demo mode"{% endif %}>Process and upload</button></div>
   </div>
+  <div class="manual-export">
+    <div><strong>Manual Shopify CSV import</strong><small>First upload the chosen ZIP images to a public image host, then select its CSV export containing filename and public URL columns.</small></div>
+    <label class="file-row compact-file"><span>Public image URL CSV</span><input id="public-image-csv" type="file" accept=".csv,text/csv"></label>
+    <div class="inline-actions"><small id="public-image-summary">No public image URL CSV selected</small><button id="download-shopify-csv" class="secondary" type="button" disabled>Download Shopify import CSV</button></div>
+    <small>The generated file preserves every exported row for affected products. In Shopify Import, select <strong>Overwrite products with matching handles</strong>. Export a fresh backup first.</small>
+  </div>
 </section>
 
 <template id="row-template">

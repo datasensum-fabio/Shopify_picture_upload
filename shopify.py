@@ -142,12 +142,14 @@ class ShopifyClient:
               }
             }
             """
-            appended = self.graphql(append_query, {
-                "productId": product_id,
-                "variantMedia": [{"variantId": variant_id, "mediaIds": [media["id"]]} for variant_id in variant_ids],
-            })["productVariantAppendMedia"]
-            if appended.get("userErrors"):
-                raise ShopifyError(str(appended["userErrors"]))
+            for offset in range(0, len(variant_ids), 100):
+                batch = variant_ids[offset:offset + 100]
+                appended = self.graphql(append_query, {
+                    "productId": product_id,
+                    "variantMedia": [{"variantId": variant_id, "mediaIds": [media["id"]]} for variant_id in batch],
+                })["productVariantAppendMedia"]
+                if appended.get("userErrors"):
+                    raise ShopifyError(str(appended["userErrors"]))
         return media["id"]
 
     def delete_product_media(self, product_id: str, media_ids: list[str]) -> None:

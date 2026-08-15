@@ -16,8 +16,17 @@ const MIN_GAP = 8;
 const ALLOWED = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic)$/i;
 const DEMO_MODE = Boolean(window.APP_CONFIG?.demoMode);
 
+const IMAGE_MIME_TYPES = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+  gif: "image/gif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", heic: "image/heic",
+};
+
 const $ = (selector) => document.querySelector(selector);
-const state = { files: [], catalogFile: null, readers: [], products: [], exactIndex: new Map(), codeIndex: new Map(), mediaFingerprints: new Map(), rows: [], running: false, filter: "all" };
+const state = {
+  files: [], catalogFile: null, catalogHeaders: [], catalogRecords: [], catalogColumns: {},
+  publicImageUrls: new Map(), readers: [], products: [], exactIndex: new Map(), codeIndex: new Map(),
+  mediaFingerprints: new Map(), rows: [], running: false, filter: "all",
+};
 
 function rankProducts(filename) {
   const needles = filenameKeys(filename);
@@ -118,16 +127,44 @@ async function ensureProductImages(product) {
   await product.mediaPromise;
 }
 
+function imageMimeType(filename) {
+  return IMAGE_MIME_TYPES[filename.split(".").pop()?.toLowerCase()] || "application/octet-stream";
+}
+
+async function decodeImage(blob) {
+  try {
+    const bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+  } catch (bitmapError) {
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.decoding = "async";
+    image.src = url;
+    try {
+      await image.decode();
+      return {
+        source: image,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        close: () => URL.revokeObjectURL(url),
+      };
+    } catch {
+      URL.revokeObjectURL(url);
+      throw bitmapError;
+    }
+  }
+}
+
 async function visualFingerprint(blob) {
-  const bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
+  const decoded = await decodeImage(blob);
   const size = 32;
   const canvas = document.createElement("canvas");
   canvas.width = size; canvas.height = size;
   const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
   context.fillStyle = "#fff"; context.fillRect(0, 0, size, size);
   context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
-  context.drawImage(bitmap, 0, 0, size, size);
-  bitmap.close();
+  context.drawImage(decoded.source, 0, 0, size, size);
+  decoded.close();
   const rgba = context.getImageData(0, 0, size, size).data;
   canvas.width = canvas.height = 1;
   const pixels = new Uint8Array(size * size * 3);
@@ -159,15 +196,15 @@ function shopifyPreviewUrl(url, width = 256) {
 }
 
 async function localThumbnailUrl(blob) {
-  const bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
-  const scale = Math.min(1, 140 / bitmap.width, 140 / bitmap.height);
+  const decoded = await decodeImage(blob);
+  const scale = Math.min(1, 140 / decoded.width, 140 / decoded.height);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.width = Math.max(1, Math.round(decoded.width * scale));
+  canvas.height = Math.max(1, Math.round(decoded.height * scale));
   const context = canvas.getContext("2d", { alpha: false });
   context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
+  context.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+  decoded.close();
   const thumbnail = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.75));
   canvas.width = canvas.height = 1;
   return thumbnail ? URL.createObjectURL(thumbnail) : "";
@@ -180,17 +217,22 @@ async function remoteImageFingerprint(url) {
         if (!response.ok) throw new Error(`Shopify CDN returned ${response.status}`);
         return response.blob();
       })
-      .then(visualFingerprint)
-      .catch(() => null));
+      .then(visualFingerprint));
   }
   return state.mediaFingerprints.get(url);
 }
 
 async function findExistingImage(product, localFingerprint) {
+  let compared = 0;
+  let lastError = null;
   for (const image of productImages(product)) {
-    const existingFingerprint = await remoteImageFingerprint(image.url);
-    if (existingFingerprint && visualFingerprintsMatch(localFingerprint, existingFingerprint)) return image;
+    try {
+      const existingFingerprint = await remoteImageFingerprint(image.url);
+      compared++;
+      if (visualFingerprintsMatch(localFingerprint, existingFingerprint)) return image;
+    } catch (error) { lastError = error; }
   }
+  if (!compared && lastError) throw lastError;
   return null;
 }
 
@@ -264,6 +306,58 @@ function parseCsv(text) {
   return rows;
 }
 
+function publicImageKeys(filename) {
+  const basename = String(filename || "").replace(/^.*[\\/]/, "").trim();
+  const stem = basename.replace(/\.[^.]+$/, "");
+  return [...new Set([`file:${basename.toLowerCase()}`, `stem:${normalize(stem)}`].filter((key) => !key.endsWith(":")))];
+}
+
+async function loadPublicImageUrls(file) {
+  const records = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
+  if (records.length < 2) throw new Error("The public image URL CSV is empty.");
+  const headers = records[0].map((value) => value.trim().toLowerCase());
+  const findColumn = (...names) => names.map((name) => headers.indexOf(name)).find((index) => index >= 0) ?? -1;
+  const nameColumn = findColumn("name", "filename", "file name");
+  const urlColumn = findColumn("url", "file url", "public url");
+  if (nameColumn < 0 || urlColumn < 0) throw new Error('The public image CSV needs "Name" (or "Filename") and "URL" columns.');
+  const urls = new Map();
+  let validRows = 0;
+  for (const values of records.slice(1)) {
+    const name = (values[nameColumn] || "").trim();
+    const url = (values[urlColumn] || "").trim();
+    if (!name || !url.startsWith("https://")) continue;
+    validRows++;
+    for (const key of publicImageKeys(name)) {
+      if (!urls.has(key)) urls.set(key, new Set());
+      urls.get(key).add(url);
+    }
+  }
+  if (!validRows) throw new Error("No public HTTPS image URLs were found in that CSV.");
+  state.publicImageUrls = urls;
+  return validRows;
+}
+
+function publicImageUrl(filename) {
+  for (const key of publicImageKeys(filename)) {
+    const matches = [...(state.publicImageUrls.get(key) || [])];
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) throw new Error(`${filename} matches multiple public image URLs. Use unique filenames in the image library.`);
+  }
+  return "";
+}
+
+function csvText(rows) {
+  return rows.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\n") + "\n";
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = filename;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
 async function loadCsvCatalog(file) {
   const records = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
   if (records.length < 2) throw new Error("The Shopify CSV is empty.");
@@ -275,8 +369,18 @@ async function loadCsvCatalog(file) {
   const imageColumn = column("Image Src"), variantImageColumn = column("Variant Image");
   const optionColumns = [1, 2, 3].map((number) => ({ name: column(`Option${number} Name`), value: column(`Option${number} Value`) }));
   if (handleColumn < 0 || titleColumn < 0) throw new Error('The product CSV must contain the Shopify columns "Handle" and "Title".');
+  state.catalogHeaders = headers;
+  state.catalogRecords = records.slice(1).map((values) => {
+    const row = [...values];
+    while (row.length < headers.length) row.push("");
+    return row.slice(0, headers.length);
+  });
+  state.catalogColumns = {
+    handle: handleColumn, title: titleColumn, image: imageColumn,
+    imagePosition: column("Image Position"), imageAlt: column("Image Alt Text"), variantImage: variantImageColumn,
+  };
   const products = new Map();
-  for (const values of records.slice(1)) {
+  for (const [recordIndex, values] of state.catalogRecords.entries()) {
     const handle = (values[handleColumn] || "").trim();
     if (!handle) continue;
     if (!products.has(handle)) products.set(handle, {
@@ -298,7 +402,7 @@ async function loadCsvCatalog(file) {
     product.variants.nodes.push({
       id: variantIdColumn >= 0 && values[variantIdColumn] ? values[variantIdColumn] : `csv://Variant/${encodeURIComponent(handle)}/${variantIndex}`,
       title: selectedOptions.map((item) => item.value).join(" / ") || sku || `Variant ${variantIndex}`,
-      sku, barcode, selectedOptions, metal,
+      sku, barcode, selectedOptions, metal, csvRecordIndex: recordIndex,
     });
   }
   if (!products.size) throw new Error("No products with handles were found in the Shopify CSV.");
@@ -340,8 +444,10 @@ async function analyse() {
   try {
     setWorking("Loading Shopify catalogue", state.catalogFile ? "Reading the selected CSV locally." : "Only product metadata is being downloaded.", 2);
     if (DEMO_MODE && !state.catalogFile) throw new Error("Select a Shopify product CSV before analysing the ZIP.");
+    state.catalogHeaders = []; state.catalogRecords = []; state.catalogColumns = {};
     state.products = state.catalogFile ? await loadCsvCatalog(state.catalogFile) : await loadCatalog();
     buildCatalogIndex();
+    state.mediaFingerprints.clear();
     for (const row of state.rows) if (row.localPreviewUrl) URL.revokeObjectURL(row.localPreviewUrl);
     state.rows = [];
     const seenHashes = new Map();
@@ -362,7 +468,10 @@ async function analyse() {
         if (expanded > MAX_EXPANDED_BYTES) throw new Error(`The archives expand beyond ${formatBytes(MAX_EXPANDED_BYTES)}.`);
         if (entry.compressedSize && entry.uncompressedSize / entry.compressedSize > MAX_RATIO) throw new Error(`${entry.filename} has an unsafe compression ratio.`);
         setWorking("Checking image duplicates", `${file.name}: ${entry.filename}`, 40);
-        const sourceBlob = await entry.getData(new BlobWriter());
+        const extractedBlob = await entry.getData(new BlobWriter(imageMimeType(entry.filename)));
+        const sourceBlob = extractedBlob.type === imageMimeType(entry.filename)
+          ? extractedBlob
+          : extractedBlob.slice(0, extractedBlob.size, imageMimeType(entry.filename));
         const imageHash = await sha256Hex(sourceBlob);
         const duplicateOf = seenHashes.get(imageHash) || null;
         if (!duplicateOf) seenHashes.set(imageHash, { archive: file.name, filename: entry.filename.replace(/^.*[\\/]/, "") });
@@ -370,19 +479,32 @@ async function analyse() {
         const pictureMetal = detectMetal(entry.filename);
         const matchStatus = classify(suggestions, pictureMetal);
         let existingImage = null;
+        let comparisonWarning = "";
         const matchedProduct = suggestions[0] ? state.products.find((product) => product.id === suggestions[0].id) : null;
         if (!duplicateOf && matchedProduct && matchStatus !== "no_match") {
           try {
             await ensureProductImages(matchedProduct);
-            if (matchStatus === "auto_approved" && productImages(matchedProduct).length) {
+            const existingProductImages = productImages(matchedProduct);
+            if (matchStatus === "auto_approved" && existingProductImages.length) {
               setWorking("Comparing existing Shopify images", `${matchedProduct.handle}: ${entry.filename}`, 55);
               existingImage = await findExistingImage(matchedProduct, await visualFingerprint(sourceBlob));
+            } else if (matchStatus === "auto_approved" && DEMO_MODE) {
+              comparisonWarning = "No Shopify image URLs were found for this product in the selected CSV.";
             }
-          } catch { existingImage = null; }
+          } catch (error) {
+            existingImage = null;
+            comparisonWarning = `Could not compare this ZIP image with Shopify: ${error.message || "image decoding failed"}`;
+          }
         }
         let localPreviewUrl = "";
         try { localPreviewUrl = await localThumbnailUrl(sourceBlob); }
-        catch { localPreviewUrl = ""; }
+        catch (error) {
+          localPreviewUrl = "";
+          comparisonWarning = [
+            comparisonWarning,
+            `Could not decode the ZIP image preview: ${error.message || "unsupported image data"}`,
+          ].filter(Boolean).join(" ");
+        }
         state.rows.push({
           id: `${fileIndex}:${entry.index ?? state.rows.length}`,
           fileIndex, entry, filename: entry.filename.replace(/^.*[\\/]/, ""),
@@ -392,7 +514,7 @@ async function analyse() {
           selectedVariantIds: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].variant_ids : [],
           uploadStatus: duplicateOf ? "duplicate" : existingImage ? "already_on_shopify" : "pending",
           decision: !duplicateOf && !existingImage && matchStatus === "auto_approved" ? "add" : "do_not_upload",
-          error: "",
+          error: comparisonWarning,
         });
       }
     }
@@ -445,6 +567,8 @@ function render() {
           preview.alt = image.alt || `Shopify product image ${index + 1}`;
           link.append(preview); gallery.append(link);
         }
+      } else if (DEMO_MODE) {
+        fragment.querySelector(".product-images-message").textContent = "No image URL in the selected Shopify CSV";
       }
     } else {
       fragment.querySelector(".product-images-message").textContent = row.isDuplicate ? "Duplicate ZIP image" : "No matched product";
@@ -525,9 +649,10 @@ function renderSummary() {
     if (counts[row.uploadStatus] !== undefined && !["duplicate", "already_on_shopify"].includes(row.uploadStatus)) counts[row.uploadStatus]++;
   }
   $("#summary").innerHTML = `<div><strong>${counts.auto_approved}</strong><small>automatic</small></div><div><strong>${counts.needs_review}</strong><small>review</small></div><div><strong>${counts.no_match}</strong><small>unmatched</small></div><div><strong>${counts.duplicate}</strong><small>duplicates</small></div><div><strong>${counts.already_on_shopify}</strong><small>already on Shopify</small></div><div><strong>${counts.uploaded}</strong><small>uploaded</small></div>`;
-  const selected = state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify && ["add", "replace"].includes(row.decision) && row.selectedId && row.uploadStatus !== "uploaded").length;
+  const selected = selectedUploadRows().length;
   $("#upload-count").textContent = `${selected} image${selected === 1 ? "" : "s"} selected`;
   $("#upload").disabled = DEMO_MODE || !selected || state.running;
+  $("#download-shopify-csv").disabled = !selected || state.running || !state.catalogRecords.length || !state.publicImageUrls.size;
 }
 
 function refreshRow(row) {
@@ -539,20 +664,131 @@ function refreshRow(row) {
   renderSummary();
 }
 
+function selectedUploadRows() {
+  return state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify
+    && ["add", "replace"].includes(row.decision) && row.selectedId && row.uploadStatus !== "uploaded");
+}
+
+function conflictingReplacement(queue) {
+  const byProduct = new Map();
+  for (const row of queue) {
+    if (!byProduct.has(row.selectedId)) byProduct.set(row.selectedId, []);
+    byProduct.get(row.selectedId).push(row);
+  }
+  return [...byProduct.values()].find((rows) => rows.length > 1 && rows.some((row) => row.decision === "replace")) || null;
+}
+
+async function downloadShopifyCsv() {
+  if (state.running) return;
+  const queue = selectedUploadRows();
+  if (!queue.length) return alert("Choose Add or Replace for at least one matched image.");
+  if (!state.catalogHeaders.length || !state.catalogRecords.length) return alert("Analyse the ZIP using a fresh Shopify product export before creating an import CSV.");
+  if (!state.publicImageUrls.size) return alert("Select a public image URL CSV first.");
+  const conflict = conflictingReplacement(queue);
+  if (conflict) {
+    const handle = conflict[0].suggestions.find((item) => item.id === conflict[0].selectedId)?.handle || "the same product";
+    return alert(`${handle} has multiple chosen images and at least one is Replace. Keep one Replace image, or set every image for this product to Add.`);
+  }
+
+  const mapped = [];
+  const missing = [];
+  for (const row of queue) {
+    const url = publicImageUrl(row.filename);
+    if (!url) missing.push(row.filename);
+    mapped.push({ row, url, alt: row.filename.replace(/\.[^.]+$/, "") });
+  }
+  if (missing.length) {
+    return alert(`No public URL was found for ${missing.length} selected image${missing.length === 1 ? "" : "s"}:\n${missing.slice(0, 12).join("\n")}${missing.length > 12 ? "\n…" : ""}\n\nUpload these images to the public image library, export its CSV again, and reselect it here.`);
+  }
+
+  const replacements = mapped.filter(({ row }) => row.decision === "replace").length;
+  if (replacements && !confirm(`The CSV will contain only the replacement image for ${replacements} product${replacements === 1 ? "" : "s"}. Back up the current Shopify export and test one product before a bulk import. Continue?`)) return;
+
+  const columns = state.catalogColumns;
+  if ([columns.handle, columns.title, columns.image, columns.imagePosition, columns.imageAlt].some((index) => index < 0)) {
+    return alert('The Shopify product export must contain Handle, Title, Image Src, Image Position, and Image Alt Text columns.');
+  }
+  const actionsByProduct = new Map();
+  for (const action of mapped) {
+    if (!actionsByProduct.has(action.row.selectedId)) actionsByProduct.set(action.row.selectedId, []);
+    actionsByProduct.get(action.row.selectedId).push(action);
+  }
+
+  const output = [state.catalogHeaders];
+  let variantImageConflicts = 0;
+  for (const [productId, actions] of actionsByProduct) {
+    const product = state.products.find((item) => item.id === productId);
+    if (!product) continue;
+    const sourceEntries = state.catalogRecords
+      .map((values, recordIndex) => ({ values, recordIndex }))
+      .filter(({ values }) => (values[columns.handle] || "").trim().toLowerCase() === product.handle.toLowerCase());
+    if (!sourceEntries.length) throw new Error(`The source Shopify CSV rows for ${product.handle} could not be found.`);
+    const productRows = sourceEntries.map(({ values }) => [...values]);
+    const localRowByRecordIndex = new Map(sourceEntries.map(({ recordIndex }, index) => [recordIndex, index]));
+    const existingImages = productRows.map((values, index) => ({
+      url: (values[columns.image] || "").trim(),
+      position: Number(values[columns.imagePosition]) || index + 1,
+      alt: values[columns.imageAlt] || "",
+    })).filter((image) => image.url).sort((left, right) => left.position - right.position);
+    const replacing = actions.some(({ row }) => row.decision === "replace");
+    const finalImages = replacing ? [] : [...existingImages];
+    for (const action of actions) {
+      if (!finalImages.some((image) => image.url === action.url)) finalImages.push({ url: action.url, alt: action.alt });
+    }
+    if (finalImages.length > 250) throw new Error(`${product.handle} would exceed Shopify's limit of 250 product images.`);
+
+    for (const values of productRows) {
+      values[columns.image] = ""; values[columns.imagePosition] = ""; values[columns.imageAlt] = "";
+      if (replacing && columns.variantImage >= 0) values[columns.variantImage] = "";
+    }
+    while (productRows.length < finalImages.length) {
+      const values = Array(state.catalogHeaders.length).fill("");
+      values[columns.handle] = product.handle;
+      productRows.push(values);
+    }
+    finalImages.forEach((image, index) => {
+      productRows[index][columns.image] = image.url;
+      productRows[index][columns.imagePosition] = String(index + 1);
+      productRows[index][columns.imageAlt] = image.alt;
+    });
+
+    if (columns.variantImage >= 0) {
+      const assigned = new Map();
+      for (const action of actions) {
+        for (const variantId of action.row.selectedVariantIds) {
+          const variant = product.variants.nodes.find((item) => item.id === variantId);
+          const localRow = variant ? localRowByRecordIndex.get(variant.csvRecordIndex) : undefined;
+          if (localRow === undefined) continue;
+          if (assigned.has(variantId) && assigned.get(variantId) !== action.url) variantImageConflicts++;
+          if (!assigned.has(variantId)) {
+            assigned.set(variantId, action.url);
+            productRows[localRow][columns.variantImage] = action.url;
+          }
+        }
+      }
+    }
+    output.push(...productRows);
+  }
+
+  if (variantImageConflicts && !confirm(`${variantImageConflicts} variant assignment${variantImageConflicts === 1 ? "" : "s"} matched more than one new image. Shopify CSV supports one Variant Image per variant, so the first image was used as its featured variant image; all chosen images remain product images. Download anyway?`)) return;
+  const stamp = new Date().toISOString().slice(0, 10);
+  downloadBlob(new Blob(["\uFEFF", csvText(output)], { type: "text/csv;charset=utf-8" }), `shopify-picture-changes-${stamp}.csv`);
+}
+
 async function decodeAndConvert(row) {
-  const source = await row.entry.getData(new BlobWriter());
-  let bitmap;
-  try { bitmap = await createImageBitmap(source, { imageOrientation: "from-image" }); }
+  const source = await row.entry.getData(new BlobWriter(imageMimeType(row.filename)));
+  let decoded;
+  try { decoded = await decodeImage(source); }
   catch { throw new Error("This image format cannot be decoded by this browser."); }
-  const scale = Math.min(1, MAX_DIMENSION / bitmap.width, MAX_DIMENSION / bitmap.height, Math.sqrt(MAX_PIXELS / (bitmap.width * bitmap.height)));
-  const width = Math.max(1, Math.floor(bitmap.width * scale));
-  const height = Math.max(1, Math.floor(bitmap.height * scale));
+  const scale = Math.min(1, MAX_DIMENSION / decoded.width, MAX_DIMENSION / decoded.height, Math.sqrt(MAX_PIXELS / (decoded.width * decoded.height)));
+  const width = Math.max(1, Math.floor(decoded.width * scale));
+  const height = Math.max(1, Math.floor(decoded.height * scale));
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   const context = canvas.getContext("2d", { alpha: false });
   context.fillStyle = "#fff"; context.fillRect(0, 0, width, height);
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
+  context.drawImage(decoded.source, 0, 0, width, height);
+  decoded.close();
   let quality = 0.9, output;
   do {
     output = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
@@ -573,14 +809,9 @@ async function uploadTarget(target, blob, filename) {
 
 async function uploadAll() {
   if (state.running || DEMO_MODE) return;
-  const queue = state.rows.filter((row) => !row.isDuplicate && !row.isAlreadyOnShopify && ["add", "replace"].includes(row.decision) && row.selectedId && row.uploadStatus !== "uploaded");
+  const queue = selectedUploadRows();
   if (!queue.length) return;
-  const byProduct = new Map();
-  for (const row of queue) {
-    if (!byProduct.has(row.selectedId)) byProduct.set(row.selectedId, []);
-    byProduct.get(row.selectedId).push(row);
-  }
-  const conflicting = [...byProduct.values()].find((rows) => rows.length > 1 && rows.some((row) => row.decision === "replace"));
+  const conflicting = conflictingReplacement(queue);
   if (conflicting) {
     const handle = conflicting[0].suggestions.find((item) => item.id === conflicting[0].selectedId)?.handle || "the same product";
     alert(`${handle} has multiple images selected and at least one is set to Replace. Use Add for all of them, or keep only one Replace row, to avoid deleting another image from this job.`);
@@ -645,11 +876,28 @@ async function reset() {
 
 $("#archive").addEventListener("change", (event) => selectFiles(event.target.files));
 $("#catalog").addEventListener("change", (event) => { state.catalogFile = event.target.files[0] || null; });
+$("#public-image-csv").addEventListener("change", async (event) => {
+  state.publicImageUrls = new Map();
+  const file = event.target.files[0];
+  if (!file) {
+    $("#public-image-summary").textContent = "No public image URL CSV selected";
+    renderSummary();
+    return;
+  }
+  try {
+    const count = await loadPublicImageUrls(file);
+    $("#public-image-summary").textContent = `${count.toLocaleString()} public image URL${count === 1 ? "" : "s"} loaded`;
+  } catch (error) {
+    $("#public-image-summary").textContent = error.message;
+  }
+  renderSummary();
+});
 $("#dropzone").addEventListener("dragover", (event) => { event.preventDefault(); event.currentTarget.classList.add("dragging"); });
 $("#dropzone").addEventListener("dragleave", (event) => event.currentTarget.classList.remove("dragging"));
 $("#dropzone").addEventListener("drop", (event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); selectFiles(event.dataTransfer.files); });
 $("#analyse").addEventListener("click", analyse);
 $("#upload").addEventListener("click", uploadAll);
+$("#download-shopify-csv").addEventListener("click", () => downloadShopifyCsv().catch((error) => alert(error.message)));
 $("#reset").addEventListener("click", reset);
 document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => {
   document.querySelectorAll(".filter").forEach((item) => item.classList.remove("active"));

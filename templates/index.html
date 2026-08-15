@@ -87,6 +87,21 @@
   </div>
 </section>
 
+<dialog id="replacement-conflict-dialog" class="replacement-conflict-dialog">
+  <form method="dialog">
+    <div class="replacement-dialog-heading">
+      <div><p class="eyebrow">REPLACE CONFLICT</p><h2>Choose which picture to keep</h2></div>
+      <button type="submit" value="cancel" class="dialog-close" aria-label="Close">×</button>
+    </div>
+    <p id="replacement-conflict-message"></p>
+    <fieldset id="replacement-conflict-options" class="replacement-conflict-options"></fieldset>
+    <div class="replacement-dialog-actions">
+      <button type="submit" value="cancel" class="secondary">Cancel</button>
+      <button type="submit" value="confirm">Apply choice</button>
+    </div>
+  </form>
+</dialog>
+
 <template id="row-template">
   <tr>
     <td><strong class="filename"></strong><small class="archive-name"></small><small class="row-error"></small></td>

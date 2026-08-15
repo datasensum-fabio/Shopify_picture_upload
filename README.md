@@ -71,6 +71,11 @@ Price, inventory, weight, vendor and other unrelated catalogue fields are omitte
 It retains existing images for **Add** and outputs only the chosen image for
 **Replace**. Before importing:
 
+If more than one selected picture targets the same product and any is set to
+**Replace**, a review popup shows the ZIP previews. The user can keep one picture
+as the sole replacement (the others become **Do not upload**) or change every
+selected picture for that product to **Add**.
+
 1. Export a fresh Shopify product backup.
 2. Confirm every selected image has a unique filename and a public HTTPS URL.
 3. Download the generated CSV.

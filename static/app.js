@@ -2,6 +2,7 @@ import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/
 import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, sha256Hex, similarity, visualFingerprintsMatch } from "./matching.js";
 import { projectShopifyImageCsv } from "./shopify-csv.js";
 import { runConcurrent } from "./async-pool.js";
+import { applyReplacementResolution, replacementConflictGroups } from "./decision-conflicts.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -756,7 +757,8 @@ function render() {
         try { await ensureProductImages(product); }
         catch { row.error = "Could not load this product's Shopify images."; }
       }
-      persistManifest(); render();
+      persistManifest();
+      renderPreservingScroll();
     });
     const top = row.suggestions.find((item) => item.id === row.selectedId) || row.suggestions[0];
     const score = fragment.querySelector(".score");
@@ -803,6 +805,12 @@ function render() {
     tbody.append(fragment);
   }
   renderSummary();
+}
+
+function renderPreservingScroll() {
+  const scrollPosition = { left: window.scrollX, top: window.scrollY };
+  render();
+  requestAnimationFrame(() => window.scrollTo(scrollPosition));
 }
 
 function renderSummary() {
@@ -853,26 +861,81 @@ function selectedUploadRows() {
     && ["add", "replace"].includes(row.decision) && row.selectedId && row.uploadStatus !== "uploaded");
 }
 
-function conflictingReplacement(queue) {
-  const byProduct = new Map();
-  for (const row of queue) {
-    if (!byProduct.has(row.selectedId)) byProduct.set(row.selectedId, []);
-    byProduct.get(row.selectedId).push(row);
+function replacementProductHandle(rows) {
+  return rows[0].suggestions.find((item) => item.id === rows[0].selectedId)?.handle || "this Shopify product";
+}
+
+function replacementProductCount(rows) {
+  return new Set(rows.filter((row) => row.decision === "replace").map((row) => row.selectedId)).size;
+}
+
+function chooseReplacementImage(rows) {
+  const dialog = $("#replacement-conflict-dialog");
+  const options = $("#replacement-conflict-options");
+  const handle = replacementProductHandle(rows);
+  $("#replacement-conflict-message").textContent = `${handle} has multiple selected pictures. Choose the single picture that should replace the current Shopify gallery, or keep every selected picture as an addition.`;
+  options.replaceChildren();
+
+  const allAdd = document.createElement("label");
+  allAdd.className = "replacement-conflict-choice all-add";
+  const allAddRadio = document.createElement("input");
+  allAddRadio.type = "radio"; allAddRadio.name = "replacement-choice"; allAddRadio.value = "all_add";
+  const allAddText = document.createElement("span");
+  allAddText.innerHTML = "<strong>Keep all selected pictures</strong><small>Change every picture for this product to Add.</small>";
+  allAdd.append(allAddRadio, allAddText);
+  options.append(allAdd);
+
+  for (const row of rows) {
+    const label = document.createElement("label");
+    label.className = "replacement-conflict-choice";
+    const radio = document.createElement("input");
+    radio.type = "radio"; radio.name = "replacement-choice"; radio.value = row.id;
+    radio.checked = row.decision === "replace" && !options.querySelector("input:checked");
+    const preview = document.createElement("img");
+    if (row.localPreviewUrl) preview.src = row.localPreviewUrl;
+    preview.alt = row.filename;
+    const text = document.createElement("span");
+    const filename = document.createElement("strong");
+    filename.textContent = row.filename;
+    const detail = document.createElement("small");
+    detail.textContent = "Keep this picture as Replace; do not upload the other selected pictures.";
+    text.append(filename, detail);
+    label.append(radio, preview, text);
+    options.append(label);
   }
-  return [...byProduct.values()].find((rows) => rows.length > 1 && rows.some((row) => row.decision === "replace")) || null;
+  if (!options.querySelector("input:checked")) allAddRadio.checked = true;
+
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => {
+      const selected = options.querySelector('input[name="replacement-choice"]:checked');
+      resolve(dialog.returnValue === "confirm" ? selected?.value || null : null);
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+
+async function resolveReplacementConflicts(queue) {
+  const conflicts = replacementConflictGroups(queue);
+  for (const rows of conflicts) {
+    const selectedRowId = await chooseReplacementImage(rows);
+    if (!selectedRowId) return false;
+    applyReplacementResolution(rows, selectedRowId);
+  }
+  if (conflicts.length) {
+    persistManifest();
+    renderPreservingScroll();
+  }
+  return true;
 }
 
 async function downloadShopifyCsv(hostedUrls = null, replacementAlreadyConfirmed = false) {
   if (state.running) return;
-  const queue = selectedUploadRows();
+  let queue = selectedUploadRows();
   if (!queue.length) return alert("Choose Add or Replace for at least one matched image.");
   if (!state.catalogHeaders.length || !state.catalogRecords.length) return alert("Analyse the ZIP using a fresh Shopify product export before creating an import CSV.");
   if (!hostedUrls && !state.publicImageUrls.size) return alert("Select a public image URL CSV first.");
-  const conflict = conflictingReplacement(queue);
-  if (conflict) {
-    const handle = conflict[0].suggestions.find((item) => item.id === conflict[0].selectedId)?.handle || "the same product";
-    return alert(`${handle} has multiple chosen images and at least one is Replace. Keep one Replace image, or set every image for this product to Add.`);
-  }
+  if (!await resolveReplacementConflicts(queue)) return;
+  queue = selectedUploadRows();
 
   const mapped = [];
   const missing = [];
@@ -885,8 +948,8 @@ async function downloadShopifyCsv(hostedUrls = null, replacementAlreadyConfirmed
     return alert(`No public URL was found for ${missing.length} selected image${missing.length === 1 ? "" : "s"}:\n${missing.slice(0, 12).join("\n")}${missing.length > 12 ? "\n…" : ""}\n\nUpload these images to the public image library, export its CSV again, and reselect it here.`);
   }
 
-  const replacements = mapped.filter(({ row }) => row.decision === "replace").length;
-  if (replacements && !replacementAlreadyConfirmed && !confirm(`The CSV will contain only the replacement image for ${replacements} product${replacements === 1 ? "" : "s"}. Back up the current Shopify export and test one product before a bulk import. Continue?`)) return;
+  const replacements = replacementProductCount(queue);
+  if (replacements && !replacementAlreadyConfirmed && !confirm(`Replace is selected for ${replacements} Shopify product${replacements === 1 ? "" : "s"}. When this CSV is imported with “Overwrite products with matching handles”, Shopify will remove the current product pictures and keep only the chosen replacement picture for each affected product. Continue?`)) return;
 
   const columns = state.catalogColumns;
   if ([columns.handle, columns.title, columns.image, columns.imagePosition, columns.imageAlt].some((index) => index < 0)) {
@@ -993,16 +1056,13 @@ async function decodeAndConvert(row, maxBytes = MAX_OUTPUT_BYTES) {
 
 async function hostImagesAndDownloadCsv() {
   if (state.running || !TEMPORARY_HOSTING) return;
-  const queue = selectedUploadRows();
+  let queue = selectedUploadRows();
   if (!queue.length) return alert("Choose Add or Replace for at least one matched image.");
   if (!state.catalogHeaders.length || !state.catalogRecords.length) return alert("Analyse the ZIP using a fresh Shopify product export before creating an import CSV.");
-  const conflict = conflictingReplacement(queue);
-  if (conflict) {
-    const handle = conflict[0].suggestions.find((item) => item.id === conflict[0].selectedId)?.handle || "the same product";
-    return alert(`${handle} has multiple chosen images and at least one is Replace. Keep one Replace image, or set every image for this product to Add.`);
-  }
-  const replacements = queue.filter((row) => row.decision === "replace").length;
-  if (replacements && !confirm(`The CSV will contain only the replacement image for ${replacements} product${replacements === 1 ? "" : "s"}. Back up the current Shopify export and test one product before a bulk import. Continue?`)) return;
+  if (!await resolveReplacementConflicts(queue)) return;
+  queue = selectedUploadRows();
+  const replacements = replacementProductCount(queue);
+  if (replacements && !confirm(`Replace is selected for ${replacements} Shopify product${replacements === 1 ? "" : "s"}. The generated CSV will remove the current product pictures when it is imported with “Overwrite products with matching handles”, keeping only the chosen replacement picture for each affected product. Continue?`)) return;
 
   state.running = true; render();
   $("#working").classList.remove("hidden", "error-card");
@@ -1072,16 +1132,12 @@ async function uploadTarget(target, blob, filename) {
 
 async function uploadAll() {
   if (state.running || DEMO_MODE) return;
-  const queue = selectedUploadRows();
+  let queue = selectedUploadRows();
   if (!queue.length) return;
-  const conflicting = conflictingReplacement(queue);
-  if (conflicting) {
-    const handle = conflicting[0].suggestions.find((item) => item.id === conflicting[0].selectedId)?.handle || "the same product";
-    alert(`${handle} has multiple images selected and at least one is set to Replace. Use Add for all of them, or keep only one Replace row, to avoid deleting another image from this job.`);
-    return;
-  }
-  const replacements = queue.filter((row) => row.decision === "replace").length;
-  if (replacements && !confirm(`Replace will permanently delete all existing Shopify images from ${replacements} matched product${replacements === 1 ? "" : "s"} after each new image is attached. Continue?`)) return;
+  if (!await resolveReplacementConflicts(queue)) return;
+  queue = selectedUploadRows();
+  const replacements = replacementProductCount(queue);
+  if (replacements && !confirm(`Replace is selected for ${replacements} Shopify product${replacements === 1 ? "" : "s"}. Direct upload will permanently remove the current product pictures and keep the chosen replacement picture for each affected product. Continue?`)) return;
   state.running = true; render();
   $("#working").classList.remove("hidden", "error-card");
   $("#analysis-progress").classList.add("hidden");

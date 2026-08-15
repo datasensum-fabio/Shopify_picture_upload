@@ -14,7 +14,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .shopify-product-gallery img { width: 82px; height: 82px; }
 .product-images-message { max-width: 150px; padding: 8px 0; }
 .upload-decision { display: grid; grid-template-columns: 1fr; gap: 4px; width: 100%; min-width: 0; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: #f1f2ee; }
-.upload-decision button { padding: 8px 9px; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12px; white-space: nowrap; }
+.upload-decision button { width: 100%; min-width: 0; padding: 8px 5px; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12px; white-space: normal; }
 .upload-decision button:hover:not(:disabled) { background: #e0e3dd; }
 .upload-decision button[data-decision="add"].active { background: var(--green); color: #fff; }
 .upload-decision button[data-decision="replace"].active { background: var(--amber); color: #fff; }

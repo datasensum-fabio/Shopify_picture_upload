@@ -46,7 +46,11 @@ assert.equal(visualFingerprintsMatch(
 ), true);
 assert.equal(visualFingerprintsMatch(
   { pixels: [10, 20, 30], hash: [0, 0, 0, 0, 0, 0, 0, 0] },
-  { pixels: [10, 20, 30], hash: [1, 1, 1, 1, 1, 0, 0, 0] },
+  { pixels: [12, 22, 32], hash: [1, 1, 1, 1, 1, 0, 0, 0] },
 ), false);
+assert.equal(visualFingerprintsMatch(
+  { pixels: [10, 20, 30], hash: [0, 0, 0, 0, 0, 0, 0, 0] },
+  { pixels: [11, 20, 30], hash: [1, 1, 1, 1, 1, 1, 1, 1] },
+), true);
 
 console.log("Structured product-code tests passed.");

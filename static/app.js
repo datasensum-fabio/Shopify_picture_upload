@@ -511,8 +511,6 @@ async function analyse() {
             if (matchStatus === "auto_approved" && existingProductImages.length) {
               setWorking("Comparing existing Shopify images", `${matchedProduct.handle}: ${entry.filename}`, 55);
               existingImage = await findExistingImage(matchedProduct, await visualFingerprint(sourceBlob));
-            } else if (matchStatus === "auto_approved" && DEMO_MODE) {
-              comparisonWarning = "No Shopify image URLs were found for this product in the selected CSV.";
             }
           } catch (error) {
             existingImage = null;
@@ -642,13 +640,17 @@ function render() {
     const decision = fragment.querySelector(".upload-decision");
     if (!row.isDuplicate && !row.isAlreadyOnShopify && ["auto_approved", "needs_review"].includes(row.matchStatus)) {
       decision.classList.remove("hidden");
-      decision.value = row.selectedId ? row.decision : "do_not_upload";
-      decision.querySelector('option[value="add"]').disabled = !row.selectedId;
-      decision.querySelector('option[value="replace"]').disabled = !row.selectedId;
-      decision.disabled = state.running || row.uploadStatus === "uploaded";
-      decision.addEventListener("change", () => {
-        row.decision = row.selectedId ? decision.value : "do_not_upload";
-        persistManifest(); render();
+      const selectedDecision = row.selectedId ? row.decision : "do_not_upload";
+      decision.querySelectorAll("button").forEach((button) => {
+        const value = button.dataset.decision;
+        const active = value === selectedDecision;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+        button.disabled = state.running || row.uploadStatus === "uploaded" || (!row.selectedId && value !== "do_not_upload");
+        button.addEventListener("click", () => {
+          row.decision = row.selectedId ? value : "do_not_upload";
+          persistManifest(); render();
+        });
       });
     }
     fragment.querySelector(".upload-status").textContent = row.isDuplicate
@@ -671,7 +673,24 @@ function renderSummary() {
     else counts[row.matchStatus]++;
     if (counts[row.uploadStatus] !== undefined && !["duplicate", "already_on_shopify"].includes(row.uploadStatus)) counts[row.uploadStatus]++;
   }
-  $("#summary").innerHTML = `<div><strong>${counts.auto_approved}</strong><small>automatic</small></div><div><strong>${counts.needs_review}</strong><small>review</small></div><div><strong>${counts.no_match}</strong><small>unmatched</small></div><div><strong>${counts.duplicate}</strong><small>duplicates</small></div><div><strong>${counts.already_on_shopify}</strong><small>already on Shopify</small></div><div><strong>${counts.uploaded}</strong><small>uploaded</small></div>`;
+  const items = [
+    ["auto_approved", "automatic"], ["needs_review", "review"], ["no_match", "unmatched"],
+    ["duplicate", "duplicates"], ["already_on_shopify", "already on Shopify"], ["uploaded", "uploaded"],
+  ];
+  const summary = $("#summary");
+  summary.replaceChildren();
+  for (const [filter, label] of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "summary-card" + (state.filter === filter ? " active" : "");
+    button.dataset.filter = filter;
+    button.setAttribute("aria-pressed", String(state.filter === filter));
+    const count = document.createElement("strong"); count.textContent = counts[filter];
+    const caption = document.createElement("small"); caption.textContent = label;
+    button.append(count, caption);
+    button.addEventListener("click", () => setFilter(filter));
+    summary.append(button);
+  }
   const selected = selectedUploadRows().length;
   $("#upload-count").textContent = `${selected} image${selected === 1 ? "" : "s"} selected`;
   $("#upload").disabled = DEMO_MODE || !selected || state.running;
@@ -897,6 +916,12 @@ async function reset() {
   location.reload();
 }
 
+function setFilter(filter) {
+  state.filter = filter;
+  document.querySelectorAll(".filter").forEach((item) => item.classList.toggle("active", item.dataset.filter === filter));
+  render();
+}
+
 $("#archive").addEventListener("change", (event) => selectFiles(event.target.files));
 $("#catalog").addEventListener("change", (event) => { state.catalogFile = event.target.files[0] || null; });
 $("#public-image-csv").addEventListener("change", async (event) => {
@@ -922,7 +947,4 @@ $("#analyse").addEventListener("click", analyse);
 $("#upload").addEventListener("click", uploadAll);
 $("#download-shopify-csv").addEventListener("click", () => downloadShopifyCsv().catch((error) => alert(error.message)));
 $("#reset").addEventListener("click", reset);
-document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => {
-  document.querySelectorAll(".filter").forEach((item) => item.classList.remove("active"));
-  button.classList.add("active"); state.filter = button.dataset.filter; render();
-}));
+document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => setFilter(button.dataset.filter)));

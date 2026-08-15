@@ -13,10 +13,20 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .shopify-product-gallery { display: flex; flex-wrap: wrap; gap: 6px; max-height: 240px; overflow: auto; }
 .shopify-product-gallery img { width: 82px; height: 82px; }
 .product-images-message { max-width: 150px; padding: 8px 0; }
-.upload-decision { min-width: 145px; padding: 8px; }
+.upload-decision { display: grid; grid-template-columns: repeat(3, minmax(78px, 1fr)); gap: 4px; min-width: 270px; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: #f1f2ee; }
+.upload-decision button { padding: 8px 9px; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12px; white-space: nowrap; }
+.upload-decision button:hover:not(:disabled) { background: #e0e3dd; }
+.upload-decision button[data-decision="add"].active { background: var(--green); color: #fff; }
+.upload-decision button[data-decision="replace"].active { background: var(--amber); color: #fff; }
+.upload-decision button[data-decision="do_not_upload"].active { background: var(--red); color: #fff; }
 .match-status.duplicate { background: #e5e7e2; color: #445149; }
 .match-status.already_on_shopify { background: #e6eef9; color: #244b78; }
 .summary-grid { grid-template-columns: repeat(6, 90px); }
+.summary-grid .summary-card { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); text-align: center; }
+.summary-grid .summary-card:hover { border-color: var(--green); background: #f1f7f4; }
+.summary-grid .summary-card.active { border-color: var(--ink); background: var(--ink); color: #fff; box-shadow: 0 0 0 2px #17231d20; }
+.summary-grid .summary-card strong { display: block; font-size: 22px; }
+.summary-grid .summary-card.active small { color: #dce3df; }
 @media (max-width: 760px) { .file-row { align-items: flex-start; flex-direction: column; } .file-row input { max-width: 100%; } .summary-grid { grid-template-columns: repeat(2, 1fr); } }
 .manual-export { margin-top: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: 16px; background: var(--card); display: grid; gap: .75rem; }
 .manual-export > div:first-child { display: grid; gap: .25rem; }

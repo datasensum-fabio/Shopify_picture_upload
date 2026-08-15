@@ -51,5 +51,16 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .export-mode-option input { margin-top: 4px; }
 .export-mode-option span { display: grid; gap: 3px; }
 .export-mode-panel { padding-top: 2px; }
+.hosting-progress { display: grid; gap: 8px; margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: #fafbf8; }
+.hosting-progress.hidden { display: none; }
+.hosting-progress.error { border-color: var(--red); background: #fff5f4; }
+.hosting-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hosting-progress-heading span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.hosting-progress progress { width: 100%; height: 12px; }
+.hosting-progress-log { max-height: 240px; margin: 2px 0 0; padding: 10px 10px 10px 34px; overflow-y: auto; border-radius: 8px; background: #17231d; color: #eef4f0; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.hosting-progress-log li { padding: 2px 0; white-space: normal; overflow-wrap: anywhere; }
+.hosting-progress-log li.success { color: #9ee2bd; }
+.hosting-progress-log li.error { color: #ffaaa1; }
+.hosting-progress-log li.muted { color: #b7c2bc; }
 @media (max-width: 760px) { .export-mode-options { grid-template-columns: 1fr; } }
 .compact-file { margin: 0; }

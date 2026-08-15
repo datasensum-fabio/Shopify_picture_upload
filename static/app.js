@@ -441,6 +441,41 @@ function setWorking(title, detail, progress = 0) {
   $("#progress").value = progress;
 }
 
+function appendHostingLog(message, level = "") {
+  const log = $("#hosting-progress-log");
+  const item = document.createElement("li");
+  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  item.textContent = `${time}  ${message}`;
+  if (level) item.classList.add(level);
+  log.append(item);
+  log.scrollTop = log.scrollHeight;
+}
+
+function startHostingProgress(total) {
+  const panel = $("#hosting-progress");
+  panel.classList.remove("hidden", "error");
+  $("#hosting-progress-log").replaceChildren();
+  $("#hosting-progress-title").textContent = "Preparing images";
+  $("#hosting-progress-count").textContent = `0 / ${total}`;
+  $("#hosting-progress-bar").max = Math.max(1, total);
+  $("#hosting-progress-bar").value = 0;
+  $("#hosting-progress-detail").textContent = "The ZIP remains on this computer. Images are processed and uploaded one at a time.";
+  appendHostingLog(`Started CSV creation for ${total} image${total === 1 ? "" : "s"}.`, "muted");
+}
+
+function updateHostingProgress(completed, total, startedAt, title) {
+  const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+  const remainingSeconds = completed ? Math.round(elapsedSeconds / completed * (total - completed)) : null;
+  $("#hosting-progress-title").textContent = title;
+  $("#hosting-progress-count").textContent = `${completed} / ${total}`;
+  $("#hosting-progress-bar").value = completed;
+  $("#hosting-progress-detail").textContent = remainingSeconds === null
+    ? "Estimating remaining time after the first image."
+    : completed === total
+      ? `Image hosting finished in ${elapsedSeconds}s.`
+      : `Approximately ${Math.max(1, Math.ceil(remainingSeconds / 60))} minute${remainingSeconds > 60 ? "s" : ""} remaining.`;
+}
+
 function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes, index = 0;
@@ -827,9 +862,10 @@ async function downloadShopifyCsv(hostedUrls = null, replacementAlreadyConfirmed
     output.push(...productRows);
   }
 
-  if (variantImageConflicts && !confirm(`${variantImageConflicts} variant assignment${variantImageConflicts === 1 ? "" : "s"} matched more than one new image. Shopify CSV supports one Variant Image per variant, so the first image was used as its featured variant image; all chosen images remain product images. Download anyway?`)) return;
+  if (variantImageConflicts && !confirm(`${variantImageConflicts} variant assignment${variantImageConflicts === 1 ? "" : "s"} matched more than one new image. Shopify CSV supports one Variant Image per variant, so the first image was used as its featured variant image; all chosen images remain product images. Download anyway?`)) return false;
   const stamp = new Date().toISOString().slice(0, 10);
   downloadBlob(new Blob(["\uFEFF", csvText(output)], { type: "text/csv;charset=utf-8" }), `shopify-picture-changes-${stamp}.csv`);
+  return true;
 }
 
 async function decodeAndConvert(row, maxBytes = MAX_OUTPUT_BYTES) {
@@ -879,11 +915,17 @@ async function hostImagesAndDownloadCsv() {
   $("#working").classList.remove("hidden", "error-card");
   const hostedUrls = new Map();
   let completed = false;
+  const startedAt = Date.now();
+  startHostingProgress(queue.length);
   try {
     for (let index = 0; index < queue.length; index++) {
       const row = queue[index];
+      appendHostingLog(`${index + 1}/${queue.length} Processing ${row.filename}`);
+      updateHostingProgress(index, queue.length, startedAt, `Processing ${row.filename}`);
       setWorking("Hosting images for Shopify CSV", `${index + 1} of ${queue.length}: ${row.filename}`, 100 * index / queue.length);
       const blob = await decodeAndConvert(row, TEMPORARY_UPLOAD_MAX_BYTES);
+      appendHostingLog(`${index + 1}/${queue.length} Processed ${row.filename} (${formatBytes(blob.size)}).`, "muted");
+      $("#hosting-progress-title").textContent = `Uploading ${row.filename}`;
       const safeName = row.filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 120) + ".jpg";
       const response = await fetch(`/api/temporary-image?filename=${encodeURIComponent(safeName)}`, {
         method: "POST",
@@ -893,17 +935,35 @@ async function hostImagesAndDownloadCsv() {
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.url) throw new Error(result.error || `Temporary upload failed (${response.status}).`);
       hostedUrls.set(row.id, result.url);
+      appendHostingLog(`${index + 1}/${queue.length} Uploaded ${row.filename}.`, "success");
+      updateHostingProgress(index + 1, queue.length, startedAt, `Uploaded ${index + 1} of ${queue.length}`);
     }
     completed = true;
+    appendHostingLog("All images uploaded. Generating the Shopify CSV.", "muted");
     setWorking("Shopify CSV ready", `${queue.length} temporary image${queue.length === 1 ? "" : "s"} hosted. Import the downloaded CSV within 24 hours.`, 100);
   } catch (error) {
     $("#working").classList.add("error-card");
+    $("#hosting-progress").classList.add("error");
+    $("#hosting-progress-title").textContent = "CSV creation stopped";
+    $("#hosting-progress-detail").textContent = error.message;
+    appendHostingLog(`Failed: ${error.message}`, "error");
     setWorking("Temporary hosting failed", error.message, 0);
     alert(error.message);
   } finally {
     state.running = false; render();
   }
-  if (completed) await downloadShopifyCsv(hostedUrls, true);
+  if (completed) {
+    const downloaded = await downloadShopifyCsv(hostedUrls, true);
+    if (downloaded) {
+      $("#hosting-progress-title").textContent = "Shopify CSV downloaded";
+      $("#hosting-progress-detail").textContent = "The download has started. Import the CSV into Shopify within 24 hours.";
+      appendHostingLog("Shopify CSV generated and download started.", "success");
+    } else {
+      $("#hosting-progress-title").textContent = "CSV download cancelled";
+      $("#hosting-progress-detail").textContent = "The hosted images remain available temporarily. Start the export again when ready.";
+      appendHostingLog("CSV generation was cancelled before download.", "error");
+    }
+  }
 }
 
 async function uploadTarget(target, blob, filename) {

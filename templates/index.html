@@ -66,6 +66,12 @@
     </div>
     <div id="automatic-export" class="export-mode-panel {% if not temporary_hosting %}hidden{% endif %}">
       <div class="inline-actions"><small>Temporary images become eligible for deletion after 24 hours and are removed by the next daily cleanup.</small><button id="host-and-download-shopify-csv" type="button" disabled>Host images &amp; download CSV</button></div>
+      <div id="hosting-progress" class="hosting-progress hidden" aria-live="polite">
+        <div class="hosting-progress-heading"><strong id="hosting-progress-title">Preparing images</strong><span id="hosting-progress-count">0 / 0</span></div>
+        <progress id="hosting-progress-bar" max="1" value="0"></progress>
+        <small id="hosting-progress-detail">Waiting to start.</small>
+        <ol id="hosting-progress-log" class="hosting-progress-log" aria-label="CSV creation progress log"></ol>
+      </div>
     </div>
     <div id="manual-export" class="export-mode-panel {% if temporary_hosting %}hidden{% endif %}">
       <label class="file-row compact-file"><span>Public image URL CSV</span><input id="public-image-csv" type="file" accept=".csv,text/csv"></label>

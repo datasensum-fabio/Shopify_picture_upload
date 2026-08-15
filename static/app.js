@@ -650,9 +650,19 @@ function render() {
         button.classList.toggle("active", active);
         button.setAttribute("aria-pressed", String(active));
         button.disabled = state.running || row.uploadStatus === "uploaded" || (!row.selectedId && value !== "do_not_upload");
-        button.addEventListener("click", () => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
           row.decision = row.selectedId ? value : "do_not_upload";
-          persistManifest(); render();
+          decision.querySelectorAll("button").forEach((option) => {
+            const active = option.dataset.decision === row.decision;
+            option.classList.toggle("active", active);
+            option.setAttribute("aria-pressed", String(active));
+          });
+          tr.querySelector(".upload-status").textContent = row.decision === "do_not_upload"
+            ? "Upload stopped by user"
+            : row.uploadStatus === "pending" ? "" : row.uploadStatus;
+          persistManifest();
+          renderSummary();
         });
       });
     }

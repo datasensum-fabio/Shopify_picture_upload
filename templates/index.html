@@ -79,7 +79,7 @@
       <div class="inline-actions"><small id="public-image-summary">No public image URL CSV selected</small><button id="download-shopify-csv" class="secondary" type="button" disabled>Download Shopify import CSV</button></div>
     </div>
     {% if not temporary_hosting %}<small class="warning">Automatic hosting is not configured yet. Connect a public Vercel Blob store and redeploy to enable it.</small>{% endif %}
-    <small>The generated file preserves every exported row for affected products. In Shopify Import, select <strong>Overwrite products with matching handles</strong>. Export a fresh backup first.</small>
+    <small>The generated file contains only product/variant identity and image columns—no prices, inventory or other catalogue data. In Shopify Import, select <strong>Overwrite products with matching handles</strong>. Export a fresh backup first.</small>
   </div>
 </section>
 

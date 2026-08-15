@@ -57,10 +57,12 @@ images must first be uploaded to a public image host such as Shopify Content >
 Files or ImageKit. Export that image library as a CSV containing `Name` (or
 `Filename`) and `URL` columns, then select it under **Manual Shopify CSV import**.
 
-The generated CSV contains the complete original export rows for affected products,
-preserves their variant data, retains existing images for **Add**, and associates
-the new image with every matching variant row. For **Replace**, it outputs only the
-chosen replacement image for that product. Before importing:
+The generated CSV keeps only the fields required to identify the affected products
+and variants and modify their images: `Handle`, `Title`, available option/SKU
+columns, `Image Src`, `Image Position`, `Image Alt Text`, and `Variant Image`.
+Price, inventory, weight, vendor and other unrelated catalogue fields are omitted.
+It retains existing images for **Add** and outputs only the chosen image for
+**Replace**. Before importing:
 
 1. Export a fresh Shopify product backup.
 2. Confirm every selected image has a unique filename and a public HTTPS URL.

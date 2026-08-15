@@ -1,5 +1,6 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
 import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, sha256Hex, similarity, visualFingerprintsMatch } from "./matching.js";
+import { projectShopifyImageCsv } from "./shopify-csv.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -866,7 +867,8 @@ async function downloadShopifyCsv(hostedUrls = null, replacementAlreadyConfirmed
 
   if (variantImageConflicts && !confirm(`${variantImageConflicts} variant assignment${variantImageConflicts === 1 ? "" : "s"} matched more than one new image. Shopify CSV supports one Variant Image per variant, so the first image was used as its featured variant image; all chosen images remain product images. Download anyway?`)) return false;
   const stamp = new Date().toISOString().slice(0, 10);
-  downloadBlob(new Blob(["\uFEFF", csvText(output)], { type: "text/csv;charset=utf-8" }), `shopify-picture-changes-${stamp}.csv`);
+  const minimalOutput = projectShopifyImageCsv(state.catalogHeaders, output.slice(1));
+  downloadBlob(new Blob(["\uFEFF", csvText(minimalOutput)], { type: "text/csv;charset=utf-8" }), `shopify-picture-changes-${stamp}.csv`);
   return true;
 }
 

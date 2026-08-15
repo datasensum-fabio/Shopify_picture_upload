@@ -135,6 +135,7 @@ def attach_image():
     variant_ids = payload.get("variant_ids") or []
     resource_url = str(payload.get("resource_url", ""))
     alt = str(payload.get("alt", ""))[:512]
+    mode = str(payload.get("mode", "add"))
     if not product_id.startswith("gid://shopify/Product/"):
         return api_error("Invalid product ID.")
     if not isinstance(variant_ids, list) or len(variant_ids) > 100 or any(
@@ -144,8 +145,14 @@ def attach_image():
         return api_error("Invalid product variant selection.")
     if not resource_url.startswith("https://"):
         return api_error("Invalid staged resource URL.")
+    if mode not in {"add", "replace"}:
+        return api_error("Invalid upload decision.")
     try:
-        ShopifyClient().attach_product_image(product_id, resource_url, alt, variant_ids)
+        client = ShopifyClient()
+        if mode == "replace":
+            client.replace_product_images(product_id, resource_url, alt, variant_ids)
+        else:
+            client.attach_product_image(product_id, resource_url, alt, variant_ids)
     except ShopifyError as exc:
         return api_error(str(exc), 502)
     return jsonify({"ok": True})

@@ -82,7 +82,7 @@ class ShopifyClient:
         query = """
         query ProductMedia($id: ID!) {
           product(id: $id) {
-            media(first: 100) {
+            media(first: 250) {
               nodes { ... on MediaImage { id alt image { url } } }
             }
           }
@@ -113,7 +113,7 @@ class ShopifyClient:
             raise ShopifyError(str(staged["userErrors"]))
         return staged["stagedTargets"]
 
-    def attach_product_image(self, product_id: str, resource_url: str, alt: str, variant_ids: list[str] | None = None) -> None:
+    def attach_product_image(self, product_id: str, resource_url: str, alt: str, variant_ids: list[str] | None = None) -> str:
         attach_query = """
         mutation Attach($product: ProductUpdateInput!, $media: [CreateMediaInput!]) {
           productUpdate(product: $product, media: $media) {
@@ -130,11 +130,11 @@ class ShopifyClient:
         errors = result.get("mediaUserErrors", []) + result.get("userErrors", [])
         if errors:
             raise ShopifyError(str(errors))
+        media_nodes = result.get("product", {}).get("media", {}).get("nodes", [])
+        media = next((item for item in media_nodes if item.get("alt") == alt), None)
+        if not media:
+            raise ShopifyError("Shopify created the product image but did not return its media ID.")
         if variant_ids:
-            media_nodes = result.get("product", {}).get("media", {}).get("nodes", [])
-            media = next((item for item in media_nodes if item.get("alt") == alt), None)
-            if not media:
-                raise ShopifyError("Shopify created the product image but did not return its media ID for variant association.")
             append_query = """
             mutation AppendVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
               productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
@@ -148,4 +148,31 @@ class ShopifyClient:
             })["productVariantAppendMedia"]
             if appended.get("userErrors"):
                 raise ShopifyError(str(appended["userErrors"]))
+        return media["id"]
+
+    def delete_product_media(self, product_id: str, media_ids: list[str]) -> None:
+        if not media_ids:
+            return
+        delete_query = """
+        mutation DeleteProductMedia($productId: ID!, $mediaIds: [ID!]!) {
+          productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+            deletedMediaIds
+            mediaUserErrors { field message }
+            userErrors { field message }
+          }
+        }
+        """
+        deleted = self.graphql(delete_query, {"productId": product_id, "mediaIds": media_ids})["productDeleteMedia"]
+        errors = deleted.get("mediaUserErrors", []) + deleted.get("userErrors", [])
+        if errors:
+            raise ShopifyError(f"The new image was attached, but Shopify could not remove the previous images: {errors}")
+
+    def replace_product_images(self, product_id: str, resource_url: str, alt: str, variant_ids: list[str] | None = None) -> str:
+        existing_ids = [
+            media["id"] for media in self.get_product_media(product_id)
+            if str(media.get("id", "")).startswith("gid://shopify/MediaImage/")
+        ]
+        new_media_id = self.attach_product_image(product_id, resource_url, alt, variant_ids)
+        self.delete_product_media(product_id, existing_ids)
+        return new_media_id
 

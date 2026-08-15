@@ -59,9 +59,19 @@
     <div class="inline-actions"><button id="reset" class="secondary" type="button">Start over</button><button id="upload" type="button" {% if demo_mode %}disabled title="Uploads are disabled in demo mode"{% endif %}>Process and upload</button></div>
   </div>
   <div class="manual-export">
-    <div><strong>Manual Shopify CSV import</strong><small>First upload the chosen ZIP images to a public image host, then select its CSV export containing filename and public URL columns.</small></div>
-    <label class="file-row compact-file"><span>Public image URL CSV</span><input id="public-image-csv" type="file" accept=".csv,text/csv"></label>
-    <div class="inline-actions"><small id="public-image-summary">No public image URL CSV selected</small><button id="download-shopify-csv" class="secondary" type="button" disabled>Download Shopify import CSV</button></div>
+    <div><strong>Shopify CSV import</strong><small>Create a Shopify import file using temporary hosted images, or provide your own public image URLs.</small></div>
+    <div class="export-mode-options" role="radiogroup" aria-label="Public image hosting method">
+      <label class="export-mode-option {% if temporary_hosting %}active{% endif %}"><input type="radio" name="export-mode" value="automatic" {% if temporary_hosting %}checked{% else %}disabled{% endif %}><span><strong>Host automatically</strong><small>Upload only the selected, processed images to Vercel Blob and create the Shopify CSV automatically.</small></span></label>
+      <label class="export-mode-option {% if not temporary_hosting %}active{% endif %}"><input type="radio" name="export-mode" value="manual" {% if not temporary_hosting %}checked{% endif %}><span><strong>Use a public image URL CSV</strong><small>Keep the existing workflow with image URLs supplied in a separate CSV.</small></span></label>
+    </div>
+    <div id="automatic-export" class="export-mode-panel {% if not temporary_hosting %}hidden{% endif %}">
+      <div class="inline-actions"><small>Temporary images become eligible for deletion after 24 hours and are removed by the next daily cleanup.</small><button id="host-and-download-shopify-csv" type="button" disabled>Host images &amp; download CSV</button></div>
+    </div>
+    <div id="manual-export" class="export-mode-panel {% if temporary_hosting %}hidden{% endif %}">
+      <label class="file-row compact-file"><span>Public image URL CSV</span><input id="public-image-csv" type="file" accept=".csv,text/csv"></label>
+      <div class="inline-actions"><small id="public-image-summary">No public image URL CSV selected</small><button id="download-shopify-csv" class="secondary" type="button" disabled>Download Shopify import CSV</button></div>
+    </div>
+    {% if not temporary_hosting %}<small class="warning">Automatic hosting is not configured yet. Connect a public Vercel Blob store and redeploy to enable it.</small>{% endif %}
     <small>The generated file preserves every exported row for affected products. In Shopify Import, select <strong>Overwrite products with matching handles</strong>. Export a fresh backup first.</small>
   </div>
 </section>
@@ -78,6 +88,6 @@
   </tr>
 </template>
 
-<script>window.APP_CONFIG = {{ {"demoMode": demo_mode}|tojson }};</script>
+<script>window.APP_CONFIG = {{ {"demoMode": demo_mode, "temporaryHosting": temporary_hosting, "temporaryUploadMaxBytes": temporary_upload_max_bytes}|tojson }};</script>
 <script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

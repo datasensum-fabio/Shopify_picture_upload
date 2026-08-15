@@ -15,6 +15,8 @@ const REVIEW_SCORE = 60;
 const MIN_GAP = 8;
 const ALLOWED = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic)$/i;
 const DEMO_MODE = Boolean(window.APP_CONFIG?.demoMode);
+const TEMPORARY_HOSTING = Boolean(window.APP_CONFIG?.temporaryHosting);
+const TEMPORARY_UPLOAD_MAX_BYTES = Number(window.APP_CONFIG?.temporaryUploadMaxBytes) || 4 * 1024 ** 2;
 
 const IMAGE_MIME_TYPES = {
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
@@ -694,7 +696,9 @@ function renderSummary() {
   const selected = selectedUploadRows().length;
   $("#upload-count").textContent = `${selected} image${selected === 1 ? "" : "s"} selected`;
   $("#upload").disabled = DEMO_MODE || !selected || state.running;
-  $("#download-shopify-csv").disabled = !selected || state.running || !state.catalogRecords.length || !state.publicImageUrls.size;
+  const exportUnavailable = !selected || state.running || !state.catalogRecords.length;
+  $("#download-shopify-csv").disabled = exportUnavailable || !state.publicImageUrls.size;
+  $("#host-and-download-shopify-csv").disabled = !TEMPORARY_HOSTING || exportUnavailable;
 }
 
 function refreshRow(row) {
@@ -720,12 +724,12 @@ function conflictingReplacement(queue) {
   return [...byProduct.values()].find((rows) => rows.length > 1 && rows.some((row) => row.decision === "replace")) || null;
 }
 
-async function downloadShopifyCsv() {
+async function downloadShopifyCsv(hostedUrls = null, replacementAlreadyConfirmed = false) {
   if (state.running) return;
   const queue = selectedUploadRows();
   if (!queue.length) return alert("Choose Add or Replace for at least one matched image.");
   if (!state.catalogHeaders.length || !state.catalogRecords.length) return alert("Analyse the ZIP using a fresh Shopify product export before creating an import CSV.");
-  if (!state.publicImageUrls.size) return alert("Select a public image URL CSV first.");
+  if (!hostedUrls && !state.publicImageUrls.size) return alert("Select a public image URL CSV first.");
   const conflict = conflictingReplacement(queue);
   if (conflict) {
     const handle = conflict[0].suggestions.find((item) => item.id === conflict[0].selectedId)?.handle || "the same product";
@@ -735,7 +739,7 @@ async function downloadShopifyCsv() {
   const mapped = [];
   const missing = [];
   for (const row of queue) {
-    const url = publicImageUrl(row.filename);
+    const url = hostedUrls ? hostedUrls.get(row.id) : publicImageUrl(row.filename);
     if (!url) missing.push(row.filename);
     mapped.push({ row, url, alt: row.filename.replace(/\.[^.]+$/, "") });
   }
@@ -744,7 +748,7 @@ async function downloadShopifyCsv() {
   }
 
   const replacements = mapped.filter(({ row }) => row.decision === "replace").length;
-  if (replacements && !confirm(`The CSV will contain only the replacement image for ${replacements} product${replacements === 1 ? "" : "s"}. Back up the current Shopify export and test one product before a bulk import. Continue?`)) return;
+  if (replacements && !replacementAlreadyConfirmed && !confirm(`The CSV will contain only the replacement image for ${replacements} product${replacements === 1 ? "" : "s"}. Back up the current Shopify export and test one product before a bulk import. Continue?`)) return;
 
   const columns = state.catalogColumns;
   if ([columns.handle, columns.title, columns.image, columns.imagePosition, columns.imageAlt].some((index) => index < 0)) {
@@ -817,28 +821,78 @@ async function downloadShopifyCsv() {
   downloadBlob(new Blob(["\uFEFF", csvText(output)], { type: "text/csv;charset=utf-8" }), `shopify-picture-changes-${stamp}.csv`);
 }
 
-async function decodeAndConvert(row) {
+async function decodeAndConvert(row, maxBytes = MAX_OUTPUT_BYTES) {
   const source = await row.entry.getData(new BlobWriter(imageMimeType(row.filename)));
   let decoded;
   try { decoded = await decodeImage(source); }
   catch { throw new Error("This image format cannot be decoded by this browser."); }
   const scale = Math.min(1, MAX_DIMENSION / decoded.width, MAX_DIMENSION / decoded.height, Math.sqrt(MAX_PIXELS / (decoded.width * decoded.height)));
-  const width = Math.max(1, Math.floor(decoded.width * scale));
-  const height = Math.max(1, Math.floor(decoded.height * scale));
+  let width = Math.max(1, Math.floor(decoded.width * scale));
+  let height = Math.max(1, Math.floor(decoded.height * scale));
   const canvas = document.createElement("canvas");
-  canvas.width = width; canvas.height = height;
-  const context = canvas.getContext("2d", { alpha: false });
-  context.fillStyle = "#fff"; context.fillRect(0, 0, width, height);
-  context.drawImage(decoded.source, 0, 0, width, height);
+  let output = null;
+  for (let resizeAttempt = 0; resizeAttempt < 6; resizeAttempt++) {
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#fff"; context.fillRect(0, 0, width, height);
+    context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
+    context.drawImage(decoded.source, 0, 0, width, height);
+    for (let quality = 0.9; quality >= 0.42; quality -= 0.08) {
+      output = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (output && output.size <= maxBytes) break;
+    }
+    if (output && output.size <= maxBytes) break;
+    width = Math.max(1, Math.floor(width * 0.82));
+    height = Math.max(1, Math.floor(height * 0.82));
+  }
   decoded.close();
-  let quality = 0.9, output;
-  do {
-    output = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-    quality -= 0.08;
-  } while (output && output.size >= MAX_OUTPUT_BYTES && quality >= 0.5);
   canvas.width = canvas.height = 1;
-  if (!output || output.size >= 20 * 1024 ** 2) throw new Error("Could not reduce this image below Shopify's 20 MB limit.");
+  if (!output || output.size > maxBytes) throw new Error(`Could not reduce this image below ${formatBytes(maxBytes)}.`);
   return output;
+}
+
+async function hostImagesAndDownloadCsv() {
+  if (state.running || !TEMPORARY_HOSTING) return;
+  const queue = selectedUploadRows();
+  if (!queue.length) return alert("Choose Add or Replace for at least one matched image.");
+  if (!state.catalogHeaders.length || !state.catalogRecords.length) return alert("Analyse the ZIP using a fresh Shopify product export before creating an import CSV.");
+  const conflict = conflictingReplacement(queue);
+  if (conflict) {
+    const handle = conflict[0].suggestions.find((item) => item.id === conflict[0].selectedId)?.handle || "the same product";
+    return alert(`${handle} has multiple chosen images and at least one is Replace. Keep one Replace image, or set every image for this product to Add.`);
+  }
+  const replacements = queue.filter((row) => row.decision === "replace").length;
+  if (replacements && !confirm(`The CSV will contain only the replacement image for ${replacements} product${replacements === 1 ? "" : "s"}. Back up the current Shopify export and test one product before a bulk import. Continue?`)) return;
+
+  state.running = true; render();
+  $("#working").classList.remove("hidden", "error-card");
+  const hostedUrls = new Map();
+  let completed = false;
+  try {
+    for (let index = 0; index < queue.length; index++) {
+      const row = queue[index];
+      setWorking("Hosting images for Shopify CSV", `${index + 1} of ${queue.length}: ${row.filename}`, 100 * index / queue.length);
+      const blob = await decodeAndConvert(row, TEMPORARY_UPLOAD_MAX_BYTES);
+      const safeName = row.filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 120) + ".jpg";
+      const response = await fetch(`/api/temporary-image?filename=${encodeURIComponent(safeName)}`, {
+        method: "POST",
+        headers: { "Content-Type": "image/jpeg" },
+        body: blob,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.url) throw new Error(result.error || `Temporary upload failed (${response.status}).`);
+      hostedUrls.set(row.id, result.url);
+    }
+    completed = true;
+    setWorking("Shopify CSV ready", `${queue.length} temporary image${queue.length === 1 ? "" : "s"} hosted. Import the downloaded CSV within 24 hours.`, 100);
+  } catch (error) {
+    $("#working").classList.add("error-card");
+    setWorking("Temporary hosting failed", error.message, 0);
+    alert(error.message);
+  } finally {
+    state.running = false; render();
+  }
+  if (completed) await downloadShopifyCsv(hostedUrls, true);
 }
 
 async function uploadTarget(target, blob, filename) {
@@ -922,6 +976,15 @@ function setFilter(filter) {
   render();
 }
 
+function setExportMode(mode) {
+  document.querySelectorAll('input[name="export-mode"]').forEach((input) => {
+    input.checked = input.value === mode;
+    input.closest(".export-mode-option").classList.toggle("active", input.checked);
+  });
+  $("#automatic-export").classList.toggle("hidden", mode !== "automatic");
+  $("#manual-export").classList.toggle("hidden", mode !== "manual");
+}
+
 $("#archive").addEventListener("change", (event) => selectFiles(event.target.files));
 $("#catalog").addEventListener("change", (event) => { state.catalogFile = event.target.files[0] || null; });
 $("#public-image-csv").addEventListener("change", async (event) => {
@@ -945,6 +1008,8 @@ $("#dropzone").addEventListener("dragleave", (event) => event.currentTarget.clas
 $("#dropzone").addEventListener("drop", (event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); selectFiles(event.dataTransfer.files); });
 $("#analyse").addEventListener("click", analyse);
 $("#upload").addEventListener("click", uploadAll);
+$("#host-and-download-shopify-csv").addEventListener("click", () => hostImagesAndDownloadCsv().catch((error) => alert(error.message)));
 $("#download-shopify-csv").addEventListener("click", () => downloadShopifyCsv().catch((error) => alert(error.message)));
 $("#reset").addEventListener("click", reset);
+document.querySelectorAll('input[name="export-mode"]').forEach((input) => input.addEventListener("change", () => setExportMode(input.value)));
 document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => setFilter(button.dataset.filter)));

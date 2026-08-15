@@ -144,10 +144,33 @@ Production and Preview environment variables:
 - `SECRET_KEY`
 - `APP_PASSWORD`
 - `DEMO_MODE` (`1` for CSV-only testing; change to `0` after adding credentials)
+- `CRON_SECRET` (a second long random value used to protect scheduled cleanup)
 
-Redeploy after saving the variables. No Vercel Blob store or persistent disk is
-required because images upload directly to Shopify. All application requests are
-small JSON messages.
+Redeploy after saving the variables. Direct Shopify uploads do not require
+persistent disk.
+
+### Automatic temporary hosting for Shopify CSV imports
+
+The app can host only the selected, browser-processed images and immediately
+generate a Shopify import CSV with their public URLs. The ZIP itself is never
+uploaded.
+
+1. Open the Vercel project and select **Storage → Create Database → Blob**.
+2. Create a **Public** Blob store and connect it to this project for Production
+   and Preview. Vercel adds `BLOB_READ_WRITE_TOKEN` automatically.
+3. Add `CRON_SECRET` to the same environments with a long random value.
+4. Redeploy the project.
+
+The browser reduces each temporary JPEG to at most 4 MB, then sends the selected
+images one at a time to the authenticated Flask endpoint. The endpoint stores
+them under `shopify-imports/<expiry>/...` in Vercel Blob and returns the public
+URLs used by the generated CSV.
+
+`vercel.json` runs `/api/cleanup-temporary-images` once daily. On the free Hobby
+plan, files become eligible for deletion after 24 hours and are removed by the
+next daily run, so practical retention is approximately 24–48 hours. Import the
+CSV into Shopify within 24 hours. The existing public-image-URL CSV workflow
+remains available as a fallback.
 
 The frontend imports zip.js as an ES module from jsDelivr. If the deployment
 must work without a third-party CDN, download and serve that module from

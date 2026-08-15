@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hmac
 import os
+import re
+import time
+import uuid
 from functools import wraps
 from typing import Any, Callable
 
@@ -21,6 +24,10 @@ app.config.update(
 )
 APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
 DEMO_MODE = os.getenv("DEMO_MODE") == "1" or not os.getenv("SHOPIFY_STORE", "").strip()
+CRON_SECRET = os.getenv("CRON_SECRET", "").strip()
+TEMP_BLOB_PREFIX = "shopify-imports/"
+TEMP_BLOB_TTL_SECONDS = 24 * 60 * 60
+TEMP_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 if os.getenv("VERCEL") and not DEMO_MODE and (not APP_PASSWORD or app.secret_key == "development-only-change-me"):
     raise RuntimeError("Vercel deployments require APP_PASSWORD and a secure SECRET_KEY.")
 
@@ -31,6 +38,34 @@ def api_error(message: str, status: int = 400):
 
 def authenticated() -> bool:
     return not APP_PASSWORD or session.get("authenticated") is True
+
+
+def temporary_hosting_configured() -> bool:
+    return bool(os.getenv("BLOB_READ_WRITE_TOKEN", "").strip())
+
+
+def blob_client():
+    from vercel.blob import BlobClient
+
+    return BlobClient()
+
+
+def blob_list_objects(**options: Any):
+    from vercel.blob import list_objects
+
+    return list_objects(**options)
+
+
+def blob_delete(urls: list[str]):
+    from vercel.blob import delete
+
+    return delete(urls)
+
+
+def blob_value(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 def require_auth(view: Callable[..., Any]):
@@ -52,6 +87,8 @@ def index():
         configured=ShopifyClient().configured or DEMO_MODE,
         protected=bool(APP_PASSWORD),
         demo_mode=DEMO_MODE,
+        temporary_hosting=temporary_hosting_configured(),
+        temporary_upload_max_bytes=TEMP_IMAGE_MAX_BYTES,
     )
 
 
@@ -158,9 +195,93 @@ def attach_image():
     return jsonify({"ok": True})
 
 
+@app.post("/api/temporary-image")
+@require_auth
+def temporary_image():
+    if not temporary_hosting_configured():
+        return api_error("Temporary image hosting is not configured. Connect a public Vercel Blob store first.", 503)
+    content_length = request.content_length or 0
+    if content_length > TEMP_IMAGE_MAX_BYTES:
+        return api_error("The processed image must be no larger than 4 MB.", 413)
+    if request.mimetype != "image/jpeg":
+        return api_error("Temporary Shopify images must be JPEG files.")
+    image = request.stream.read(TEMP_IMAGE_MAX_BYTES + 1)
+    if not image:
+        return api_error("The image is empty.")
+    if len(image) > TEMP_IMAGE_MAX_BYTES:
+        return api_error("The processed image must be no larger than 4 MB.", 413)
+
+    supplied_name = request.args.get("filename", "image.jpg")
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", supplied_name.rsplit(".", 1)[0]).strip("-")[:120] or "image"
+    expires_at = int(time.time()) + TEMP_BLOB_TTL_SECONDS
+    pathname = f"{TEMP_BLOB_PREFIX}{expires_at}/{uuid.uuid4().hex}-{stem}.jpg"
+    try:
+        blob = blob_client().put(
+            pathname,
+            image,
+            access="public",
+            content_type="image/jpeg",
+            cache_control_max_age=TEMP_BLOB_TTL_SECONDS,
+        )
+    except Exception:
+        app.logger.exception("Temporary image upload failed")
+        return api_error("Temporary image hosting failed. Check the Vercel Blob configuration.", 502)
+    url = blob_value(blob, "url", "")
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return api_error("Temporary image hosting did not return a public URL.", 502)
+    return jsonify({"url": url, "expires_at": expires_at})
+
+
+@app.get("/api/cleanup-temporary-images")
+def cleanup_temporary_images():
+    supplied = request.headers.get("Authorization", "")
+    expected = f"Bearer {CRON_SECRET}" if CRON_SECRET else ""
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return api_error("Unauthorized.", 401)
+    if not temporary_hosting_configured():
+        return api_error("Temporary image hosting is not configured.", 503)
+
+    now = int(time.time())
+    cursor = None
+    scanned = 0
+    deleted = 0
+    expired_urls = []
+    for _ in range(20):
+        page = blob_list_objects(prefix=TEMP_BLOB_PREFIX, cursor=cursor, limit=1000)
+        blobs = blob_value(page, "blobs", []) or []
+        scanned += len(blobs)
+        for blob in blobs:
+            pathname = str(blob_value(blob, "pathname", ""))
+            relative = pathname.removeprefix(TEMP_BLOB_PREFIX)
+            expiry_text = relative.split("/", 1)[0]
+            if expiry_text.isdigit() and int(expiry_text) <= now:
+                url = blob_value(blob, "url", "")
+                if url:
+                    expired_urls.append(url)
+        if len(expired_urls) >= 100:
+            deleted += len(expired_urls)
+            blob_delete(expired_urls)
+            expired_urls.clear()
+        if not blob_value(page, "has_more", False):
+            cursor = None
+            break
+        cursor = blob_value(page, "cursor")
+        if not cursor:
+            break
+    if expired_urls:
+        deleted += len(expired_urls)
+        blob_delete(expired_urls)
+    return jsonify({"ok": True, "scanned": scanned, "deleted": deleted, "has_more": bool(cursor)})
+
+
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, "shopify_configured": ShopifyClient().configured, "demo_mode": DEMO_MODE})
+    return jsonify({
+        "ok": True,
+        "shopify_configured": ShopifyClient().configured,
+        "demo_mode": DEMO_MODE,
+        "temporary_hosting_configured": temporary_hosting_configured(),
+    })
 
 
 if __name__ == "__main__":

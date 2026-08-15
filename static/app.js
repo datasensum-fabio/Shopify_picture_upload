@@ -596,17 +596,19 @@ function render() {
     } else {
       fragment.querySelector(".product-images-message").textContent = row.isDuplicate ? "Duplicate ZIP image" : "No matched product";
     }
-    const handle = fragment.querySelector(".product-handle");
-    handle.textContent = row.suggestions.find((item) => item.id === row.selectedId)?.handle || row.suggestions[0]?.handle || "—";
-    const metalMatch = fragment.querySelector(".metal-match");
-    const updateMetalMatch = () => {
-      const suggestion = row.suggestions.find((item) => item.id === row.selectedId) || row.suggestions[0];
-      row.selectedVariantIds = suggestion?.variant_ids || [];
-      if (!row.pictureMetal) metalMatch.textContent = "Not specified in picture name";
-      else if (row.selectedVariantIds.length) metalMatch.textContent = `${row.pictureMetal.code} — ${row.selectedVariantIds.length} matching variant${row.selectedVariantIds.length === 1 ? "" : "s"}`;
-      else metalMatch.textContent = `${row.pictureMetal.code} — no matching variant`;
+    const handleMetal = fragment.querySelector(".product-handle-metal");
+    const matchingVariants = fragment.querySelector(".matching-variants");
+    const updateShopifyMatch = () => {
+      const suggestion = row.suggestions.find((item) => item.id === row.selectedId);
+      const product = state.products.find((item) => item.id === suggestion?.id);
+      const allVariantIds = (product?.variants?.nodes || []).map((variant) => variant.id);
+      row.selectedVariantIds = row.pictureMetal ? (suggestion?.variant_ids || []) : allVariantIds;
+      handleMetal.textContent = suggestion ? `${suggestion.handle}${row.pictureMetal ? ` + ${row.pictureMetal.code}` : ""}` : "—";
+      matchingVariants.textContent = row.selectedVariantIds.length
+        ? `${row.selectedVariantIds.length} matching variant${row.selectedVariantIds.length === 1 ? "" : "s"}`
+        : "No matching variants";
     };
-    updateMetalMatch();
+    updateShopifyMatch();
     const select = fragment.querySelector(".product-select");
     for (const product of row.suggestions) {
       const option = document.createElement("option");
@@ -620,8 +622,7 @@ function render() {
       row.selectedId = select.value;
       if (!select.value) row.decision = "do_not_upload";
       if (select.value && row.matchStatus === "no_match") row.matchStatus = "needs_review";
-      handle.textContent = row.suggestions.find((item) => item.id === select.value)?.handle || "—";
-      updateMetalMatch();
+      updateShopifyMatch();
       const product = state.products.find((item) => item.id === select.value);
       if (product) {
         select.disabled = true;
@@ -630,7 +631,7 @@ function render() {
       }
       persistManifest(); render();
     });
-    const top = row.suggestions[0];
+    const top = row.suggestions.find((item) => item.id === row.selectedId) || row.suggestions[0];
     const score = fragment.querySelector(".score");
     score.textContent = top ? `${top.score}%` : "—";
     score.className = `score ${row.matchStatus}`;

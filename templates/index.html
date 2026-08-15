@@ -51,7 +51,7 @@
     <button type="button" class="filter" data-filter="failed">Failed</button>
   </div>
   <div class="table-wrap"><table>
-    <thead><tr><th>Picture name</th><th>Image comparison</th><th>Matched Shopify handle</th><th>Metal / Shopify variant</th><th>Product choice</th><th>Confidence</th><th>Decision</th></tr></thead>
+    <thead><tr><th>Picture name</th><th>Image comparison</th><th>Shopify Match</th><th>Product choice</th><th>Decision</th></tr></thead>
     <tbody id="rows"></tbody>
   </table></div>
   <div class="actionbar">
@@ -80,10 +80,8 @@
   <tr>
     <td><strong class="filename"></strong><small class="archive-name"></small><small class="row-error"></small></td>
     <td class="comparison-cell"><div class="image-comparison"><figure class="zip-preview"><img class="local-preview" loading="lazy" alt="ZIP image preview"><small class="local-preview-missing">Preview unavailable</small><figcaption>ZIP image</figcaption></figure><div class="product-images"><div class="shopify-product-gallery"></div><small class="product-images-message">Product with no pictures</small><span>Shopify product pictures</span></div></div></td>
-    <td><strong class="product-handle"></strong></td>
-    <td><strong class="metal-match"></strong></td>
-    <td><select class="product-select"><option value="">Skip / no product</option></select></td>
-    <td><span class="score"></span><small class="matched-on"></small></td>
+    <td class="shopify-match"><strong class="product-handle-metal"></strong><small class="matching-variants"></small></td>
+    <td class="product-choice"><select class="product-select"><option value="">Skip / no product</option></select><div class="confidence"><span class="score"></span><small class="matched-on"></small></div></td>
     <td><span class="match-status"></span><div class="upload-decision hidden" role="group" aria-label="Upload decision"><button type="button" data-decision="add">Add</button><button type="button" data-decision="replace">Replace</button><button type="button" data-decision="do_not_upload">Do not upload</button></div><small class="upload-status"></small></td>
   </tr>
 </template>

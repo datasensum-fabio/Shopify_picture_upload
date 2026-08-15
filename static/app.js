@@ -20,6 +20,11 @@ const IMAGE_MIME_TYPES = {
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
   gif: "image/gif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", heic: "image/heic",
 };
+const FINGERPRINT_SIZE = 32;
+const PERCEPTUAL_HASH_SIZE = 8;
+const PERCEPTUAL_COSINES = Array.from({ length: PERCEPTUAL_HASH_SIZE }, (_, frequency) =>
+  Array.from({ length: FINGERPRINT_SIZE }, (_, position) =>
+    Math.cos((2 * position + 1) * frequency * Math.PI / (2 * FINGERPRINT_SIZE))));
 
 const $ = (selector) => document.querySelector(selector);
 const state = {
@@ -157,7 +162,7 @@ async function decodeImage(blob) {
 
 async function visualFingerprint(blob) {
   const decoded = await decodeImage(blob);
-  const size = 32;
+  const size = FINGERPRINT_SIZE;
   const canvas = document.createElement("canvas");
   canvas.width = size; canvas.height = size;
   const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
@@ -184,7 +189,25 @@ async function visualFingerprint(blob) {
       hash[y * 8 + x] = grayAt(left, sampleY) < grayAt(right, sampleY) ? 1 : 0;
     }
   }
-  return { pixels, hash };
+  const grayscale = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) grayscale[y * size + x] = grayAt(x, y);
+  const coefficients = new Float64Array(PERCEPTUAL_HASH_SIZE ** 2);
+  for (let vertical = 0; vertical < PERCEPTUAL_HASH_SIZE; vertical++) {
+    for (let horizontal = 0; horizontal < PERCEPTUAL_HASH_SIZE; horizontal++) {
+      let coefficient = 0;
+      for (let y = 0; y < size; y++) {
+        const verticalCosine = PERCEPTUAL_COSINES[vertical][y];
+        for (let x = 0; x < size; x++) {
+          coefficient += grayscale[y * size + x] * PERCEPTUAL_COSINES[horizontal][x] * verticalCosine;
+        }
+      }
+      coefficients[vertical * PERCEPTUAL_HASH_SIZE + horizontal] = coefficient;
+    }
+  }
+  const median = [...coefficients.slice(1)].sort((left, right) => left - right)[Math.floor((coefficients.length - 1) / 2)];
+  const perceptualHash = new Uint8Array(coefficients.length);
+  for (let index = 1; index < coefficients.length; index++) perceptualHash[index] = coefficients[index] > median ? 1 : 0;
+  return { pixels, hash, perceptualHash };
 }
 
 function shopifyPreviewUrl(url, width = 256) {

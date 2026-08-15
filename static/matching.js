@@ -120,9 +120,18 @@ export function visualFingerprintsMatch(left, right, maxPixelDelta = 6, maxHashD
   const meanPixelDelta = pixelDelta / left.pixels.length;
   let hashDistance = 0;
   for (let index = 0; index < left.hash.length; index++) hashDistance += left.hash[index] === right.hash[index] ? 0 : 1;
+  let perceptualDistance = Infinity;
+  if (left.perceptualHash?.length && left.perceptualHash.length === right.perceptualHash?.length) {
+    perceptualDistance = 0;
+    for (let index = 0; index < left.perceptualHash.length; index++) {
+      perceptualDistance += left.perceptualHash[index] === right.perceptualHash[index] ? 0 : 1;
+    }
+  }
   // Very small re-encoding differences can flip dHash bits on nearly flat areas.
   // A sub-one-level mean RGB delta is already stronger evidence than the hash.
-  return meanPixelDelta <= 1 || (meanPixelDelta <= maxPixelDelta && hashDistance <= maxHashDistance);
+  return meanPixelDelta <= 1
+    || (meanPixelDelta <= maxPixelDelta && hashDistance <= maxHashDistance)
+    || (meanPixelDelta <= 18 && perceptualDistance <= 5);
 }
 
 export function levenshtein(a, b) {

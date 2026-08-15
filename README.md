@@ -26,6 +26,13 @@ There is no server-side job directory, ZIP upload or image processing. A small
 manifest in browser local storage records selections and completed uploads. To
 resume after closing the page, select the same archives again.
 
+During local analysis the page shows a percentage/count, the current filename,
+and timestamped logs for catalogue loading, ZIP indexing, matching, duplicate
+checks, and existing-Shopify-image comparisons. ZIP extraction, hashing, and
+thumbnail creation stay sequential to keep browser memory bounded. Network-bound
+Shopify image comparisons use up to four concurrent workers, with shared caches
+for repeated products and image URLs, so large matched sets complete faster.
+
 ### Structured product-code matching
 
 When a picture name begins with letters followed by digits, the letters are the
@@ -92,7 +99,8 @@ to be the final meaningful part of the name.
 - 50 GB maximum expanded content per job.
 - 250 MB maximum expanded size for one source image.
 - Compression ratios above 250:1 are rejected as a ZIP-bomb precaution.
-- Processing and upload are sequential to keep memory bounded.
+- ZIP extraction, hashing, thumbnail creation, and upload are sequential to keep
+  memory bounded; existing-Shopify-image comparisons run four at a time.
 
 Archives above 2 GB should be processed in desktop Chrome or Edge. The selected
 files remain on disk, but the browser must temporarily decode one full image at a

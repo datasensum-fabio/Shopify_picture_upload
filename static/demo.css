@@ -64,3 +64,10 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .hosting-progress-log li.muted { color: #b7c2bc; }
 @media (max-width: 760px) { .export-mode-options { grid-template-columns: 1fr; } }
 .compact-file { margin: 0; }
+.analysis-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.analysis-progress-heading span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.analysis-progress-log { max-height: 220px; margin: 8px 0 0; padding: 10px 10px 10px 34px; overflow-y: auto; border-radius: 8px; background: #17231d; color: #eef4f0; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.analysis-progress-log li { padding: 2px 0; white-space: normal; overflow-wrap: anywhere; }
+.analysis-progress-log li.success { color: #9ee2bd; }
+.analysis-progress-log li.error { color: #ffaaa1; }
+.analysis-progress-log li.muted { color: #b7c2bc; }

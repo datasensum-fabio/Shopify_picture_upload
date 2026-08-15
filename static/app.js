@@ -1,6 +1,7 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
 import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, sha256Hex, similarity, visualFingerprintsMatch } from "./matching.js";
 import { projectShopifyImageCsv } from "./shopify-csv.js";
+import { runConcurrent } from "./async-pool.js";
 
 const MAX_ARCHIVE_BYTES = 10 * 1024 ** 3;
 const MAX_ENTRIES = 10_000;
@@ -14,6 +15,7 @@ const MAX_PIXELS = 25_000_000;
 const AUTO_SCORE = 90;
 const REVIEW_SCORE = 60;
 const MIN_GAP = 8;
+const ANALYSIS_COMPARISON_CONCURRENCY = 4;
 const ALLOWED = /\.(jpe?g|png|webp|gif|bmp|tiff?|heic)$/i;
 const DEMO_MODE = Boolean(window.APP_CONFIG?.demoMode);
 const TEMPORARY_HOSTING = Boolean(window.APP_CONFIG?.temporaryHosting);
@@ -442,6 +444,32 @@ function setWorking(title, detail, progress = 0) {
   $("#progress").value = progress;
 }
 
+function appendAnalysisLog(message, level = "") {
+  const log = $("#analysis-progress-log");
+  const item = document.createElement("li");
+  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  item.textContent = `${time}  ${message}`;
+  if (level) item.classList.add(level);
+  log.append(item);
+  while (log.children.length > 250) log.firstElementChild.remove();
+  log.scrollTop = log.scrollHeight;
+}
+
+function startAnalysisProgress() {
+  $("#working").classList.remove("error-card");
+  $("#analysis-progress").classList.remove("hidden");
+  $("#analysis-progress-log").replaceChildren();
+  $("#analysis-progress-count").textContent = "Starting…";
+  appendAnalysisLog("Local analysis started. The ZIP remains on this computer.", "muted");
+}
+
+function updateAnalysisProgress(title, detail, progress, completed = null, total = null) {
+  setWorking(title, detail, progress);
+  $("#analysis-progress-count").textContent = completed === null
+    ? `${Math.round(progress)}%`
+    : `${completed.toLocaleString()} / ${total.toLocaleString()}`;
+}
+
 function appendHostingLog(message, level = "") {
   const log = $("#hosting-progress-log");
   const item = document.createElement("li");
@@ -504,33 +532,59 @@ async function analyse() {
   if (!state.files.length || state.running) return;
   state.running = true;
   $("#analyse").disabled = true;
+  startAnalysisProgress();
   try {
-    setWorking("Loading Shopify catalogue", state.catalogFile ? "Reading the selected CSV locally." : "Only product metadata is being downloaded.", 2);
+    updateAnalysisProgress("Loading Shopify catalogue", state.catalogFile ? "Reading the selected CSV locally." : "Only product metadata is being downloaded.", 2);
+    appendAnalysisLog(state.catalogFile ? `Reading ${state.catalogFile.name}.` : "Downloading Shopify product metadata.");
     if (DEMO_MODE && !state.catalogFile) throw new Error("Select a Shopify product CSV before analysing the ZIP.");
     state.catalogHeaders = []; state.catalogRecords = []; state.catalogColumns = {};
     state.products = state.catalogFile ? await loadCsvCatalog(state.catalogFile) : await loadCatalog();
     buildCatalogIndex();
+    appendAnalysisLog(`${state.products.length.toLocaleString()} Shopify products indexed.`, "success");
     state.mediaFingerprints.clear();
     for (const row of state.rows) if (row.localPreviewUrl) URL.revokeObjectURL(row.localPreviewUrl);
     state.rows = [];
-    const seenHashes = new Map();
-    let expanded = 0, entryCount = 0;
+
+    const archives = [];
+    let entryCount = 0;
+    let totalImages = 0;
     for (let fileIndex = 0; fileIndex < state.files.length; fileIndex++) {
       const file = state.files[fileIndex];
-      setWorking("Reading archive index", `${file.name} (${formatBytes(file.size)})`, 5 + 35 * fileIndex / state.files.length);
+      updateAnalysisProgress("Reading archive index", `${fileIndex + 1} of ${state.files.length}: ${file.name}`, 8 + 12 * (fileIndex / state.files.length));
+      appendAnalysisLog(`Reading ZIP index: ${file.name} (${formatBytes(file.size)}).`);
       const reader = new ZipReader(new BlobReader(file), { useWebWorkers: true });
       state.readers.push(reader);
       const entries = await reader.getEntries();
       entryCount += entries.length;
       if (entryCount > MAX_ENTRIES) throw new Error(`The archives contain more than ${MAX_ENTRIES.toLocaleString()} entries.`);
-      for (const entry of entries) {
-        if (entry.directory || !ALLOWED.test(entry.filename)) continue;
-        if (state.rows.length >= MAX_IMAGES) throw new Error(`The job contains more than ${MAX_IMAGES.toLocaleString()} images.`);
+      const imageEntries = entries.filter((entry) => !entry.directory && ALLOWED.test(entry.filename));
+      totalImages += imageEntries.length;
+      if (totalImages > MAX_IMAGES) throw new Error(`The job contains more than ${MAX_IMAGES.toLocaleString()} images.`);
+      archives.push({ file, fileIndex, imageEntries });
+      appendAnalysisLog(`${imageEntries.length.toLocaleString()} supported images found in ${file.name}.`, "success");
+    }
+    if (!totalImages) throw new Error("No supported images were found in the selected archives.");
+    appendAnalysisLog(`${totalImages.toLocaleString()} images queued for local matching.`, "muted");
+
+    const seenHashes = new Map();
+    const comparisonJobs = [];
+    let expanded = 0;
+    let processedImages = 0;
+    for (const { file, fileIndex, imageEntries } of archives) {
+      for (const entry of imageEntries) {
         if (entry.uncompressedSize > MAX_ENTRY_BYTES) throw new Error(`${entry.filename} expands beyond ${formatBytes(MAX_ENTRY_BYTES)}.`);
         expanded += entry.uncompressedSize;
         if (expanded > MAX_EXPANDED_BYTES) throw new Error(`The archives expand beyond ${formatBytes(MAX_EXPANDED_BYTES)}.`);
         if (entry.compressedSize && entry.uncompressedSize / entry.compressedSize > MAX_RATIO) throw new Error(`${entry.filename} has an unsafe compression ratio.`);
-        setWorking("Checking image duplicates", `${file.name}: ${entry.filename}`, 40);
+        const currentImage = processedImages + 1;
+        updateAnalysisProgress(
+          "Matching local images",
+          `${currentImage.toLocaleString()} of ${totalImages.toLocaleString()}: ${entry.filename}`,
+          20 + 45 * (processedImages / totalImages),
+          processedImages,
+          totalImages,
+        );
+        appendAnalysisLog(`${currentImage}/${totalImages} Reading ${entry.filename}.`);
         const extractedBlob = await entry.getData(new BlobWriter(imageMimeType(entry.filename)));
         const sourceBlob = extractedBlob.type === imageMimeType(entry.filename)
           ? extractedBlob
@@ -541,19 +595,13 @@ async function analyse() {
         const suggestions = rankProducts(entry.filename);
         const pictureMetal = detectMetal(entry.filename);
         const matchStatus = classify(suggestions, pictureMetal);
-        let existingImage = null;
         let comparisonWarning = "";
         const matchedProduct = suggestions[0] ? state.products.find((product) => product.id === suggestions[0].id) : null;
-        if (!duplicateOf && matchedProduct && matchStatus !== "no_match") {
+        let comparisonFingerprint = null;
+        if (!duplicateOf && matchedProduct && matchStatus === "auto_approved") {
           try {
-            await ensureProductImages(matchedProduct);
-            const existingProductImages = productImages(matchedProduct);
-            if (matchStatus === "auto_approved" && existingProductImages.length) {
-              setWorking("Comparing existing Shopify images", `${matchedProduct.handle}: ${entry.filename}`, 55);
-              existingImage = await findExistingImage(matchedProduct, await visualFingerprint(sourceBlob));
-            }
+            if (!DEMO_MODE || productImages(matchedProduct).length) comparisonFingerprint = await visualFingerprint(sourceBlob);
           } catch (error) {
-            existingImage = null;
             comparisonWarning = `Could not compare this ZIP image with Shopify: ${error.message || "image decoding failed"}`;
           }
         }
@@ -566,20 +614,59 @@ async function analyse() {
             `Could not decode the ZIP image preview: ${error.message || "unsupported image data"}`,
           ].filter(Boolean).join(" ");
         }
-        state.rows.push({
+        const row = {
           id: `${fileIndex}:${entry.index ?? state.rows.length}`,
           fileIndex, entry, filename: entry.filename.replace(/^.*[\\/]/, ""),
-          archive: file.name, suggestions, matchStatus, imageHash, duplicateOf, isDuplicate: Boolean(duplicateOf), existingImage, isAlreadyOnShopify: Boolean(existingImage), localPreviewUrl,
+          archive: file.name, suggestions, matchStatus, imageHash, duplicateOf, isDuplicate: Boolean(duplicateOf), existingImage: null, isAlreadyOnShopify: false, localPreviewUrl,
           selectedId: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].id : "",
           pictureMetal,
           selectedVariantIds: !duplicateOf && matchStatus === "auto_approved" ? suggestions[0].variant_ids : [],
-          uploadStatus: duplicateOf ? "duplicate" : existingImage ? "already_on_shopify" : "pending",
-          decision: !duplicateOf && !existingImage && matchStatus === "auto_approved" ? "add" : "do_not_upload",
+          uploadStatus: duplicateOf ? "duplicate" : "pending",
+          decision: !duplicateOf && matchStatus === "auto_approved" ? "add" : "do_not_upload",
           error: comparisonWarning,
-        });
+        };
+        state.rows.push(row);
+        if (!duplicateOf && matchedProduct && matchStatus !== "no_match") {
+          comparisonJobs.push({ row, product: matchedProduct, fingerprint: comparisonFingerprint });
+        }
+        processedImages++;
+        const resultLabel = duplicateOf ? "duplicate" : matchStatus.replaceAll("_", " ");
+        appendAnalysisLog(`${currentImage}/${totalImages} Matched ${entry.filename}: ${resultLabel}.`, duplicateOf ? "muted" : "success");
       }
     }
-    if (!state.rows.length) throw new Error("No supported images were found in the selected archives.");
+
+    appendAnalysisLog(`Comparing ${comparisonJobs.length.toLocaleString()} matched image${comparisonJobs.length === 1 ? "" : "s"} with Shopify using up to ${ANALYSIS_COMPARISON_CONCURRENCY} concurrent workers.`, "muted");
+    await runConcurrent(comparisonJobs, ANALYSIS_COMPARISON_CONCURRENCY, async ({ row, product, fingerprint }) => {
+      appendAnalysisLog(`Comparing ${row.filename} with ${product.handle}.`);
+      try {
+        await ensureProductImages(product);
+        if (fingerprint && productImages(product).length) {
+          const existingImage = await findExistingImage(product, fingerprint);
+          if (existingImage) {
+            row.existingImage = existingImage;
+            row.isAlreadyOnShopify = true;
+            row.uploadStatus = "already_on_shopify";
+            row.decision = "do_not_upload";
+          }
+        }
+      } catch (error) {
+        const warning = `Could not compare this ZIP image with Shopify: ${error.message || "image decoding failed"}`;
+        row.error = [row.error, warning].filter(Boolean).join(" ");
+      }
+    }, (completed, total, jobIndex) => {
+      const row = comparisonJobs[jobIndex].row;
+      updateAnalysisProgress(
+        "Comparing Shopify images",
+        `${completed.toLocaleString()} of ${total.toLocaleString()}: ${row.filename}`,
+        65 + 33 * (completed / Math.max(1, total)),
+        completed,
+        total,
+      );
+      appendAnalysisLog(`${completed}/${total} Finished ${row.filename}${row.isAlreadyOnShopify ? " — already on Shopify" : ""}.`, row.error ? "error" : "success");
+    });
+
+    updateAnalysisProgress("Local analysis complete", `${totalImages.toLocaleString()} images analysed.`, 100, totalImages, totalImages);
+    appendAnalysisLog(`Analysis complete: ${totalImages.toLocaleString()} images processed.`, "success");
     restoreManifest();
     persistManifest();
     render();
@@ -588,6 +675,8 @@ async function analyse() {
     $("#review").classList.remove("hidden");
   } catch (error) {
     setWorking("Could not analyse archive", error.message, 0);
+    $("#analysis-progress-count").textContent = "Stopped";
+    appendAnalysisLog(`Analysis stopped: ${error.message}`, "error");
     $("#working").classList.add("error-card");
   } finally {
     state.running = false;
@@ -917,6 +1006,7 @@ async function hostImagesAndDownloadCsv() {
 
   state.running = true; render();
   $("#working").classList.remove("hidden", "error-card");
+  $("#analysis-progress").classList.add("hidden");
   const hostedUrls = new Map();
   let completed = false;
   const startedAt = Date.now();
@@ -994,6 +1084,7 @@ async function uploadAll() {
   if (replacements && !confirm(`Replace will permanently delete all existing Shopify images from ${replacements} matched product${replacements === 1 ? "" : "s"} after each new image is attached. Continue?`)) return;
   state.running = true; render();
   $("#working").classList.remove("hidden", "error-card");
+  $("#analysis-progress").classList.add("hidden");
   try {
     for (let index = 0; index < queue.length; index++) {
       const row = queue[index];

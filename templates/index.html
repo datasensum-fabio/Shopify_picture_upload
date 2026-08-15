@@ -71,6 +71,7 @@
         <progress id="hosting-progress-bar" max="1" value="0"></progress>
         <small id="hosting-progress-detail">Waiting to start.</small>
         <ol id="hosting-progress-log" class="hosting-progress-log" aria-label="CSV creation progress log"></ol>
+        <div class="inline-actions"><small>If the browser blocks the automatic download, use this button without uploading the images again.</small><button id="download-hosted-csv" class="secondary hidden" type="button">Download CSV now</button></div>
       </div>
     </div>
     <div id="manual-export" class="export-mode-panel {% if temporary_hosting %}hidden{% endif %}">

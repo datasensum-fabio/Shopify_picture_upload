@@ -31,8 +31,8 @@ const PERCEPTUAL_COSINES = Array.from({ length: PERCEPTUAL_HASH_SIZE }, (_, freq
 const $ = (selector) => document.querySelector(selector);
 const state = {
   files: [], catalogFile: null, catalogHeaders: [], catalogRecords: [], catalogColumns: {},
-  publicImageUrls: new Map(), readers: [], products: [], exactIndex: new Map(), codeIndex: new Map(),
-  mediaFingerprints: new Map(), rows: [], running: false, filter: "all",
+    publicImageUrls: new Map(), readers: [], products: [], exactIndex: new Map(), codeIndex: new Map(),
+  mediaFingerprints: new Map(), hostedCsvUrls: null, rows: [], running: false, filter: "all",
 };
 
 function rankProducts(filename) {
@@ -460,6 +460,8 @@ function startHostingProgress(total) {
   $("#hosting-progress-bar").max = Math.max(1, total);
   $("#hosting-progress-bar").value = 0;
   $("#hosting-progress-detail").textContent = "The ZIP remains on this computer. Images are processed and uploaded one at a time.";
+  $("#download-hosted-csv").classList.add("hidden");
+  state.hostedCsvUrls = null;
   appendHostingLog(`Started CSV creation for ${total} image${total === 1 ? "" : "s"}.`, "muted");
 }
 
@@ -939,6 +941,8 @@ async function hostImagesAndDownloadCsv() {
       updateHostingProgress(index + 1, queue.length, startedAt, `Uploaded ${index + 1} of ${queue.length}`);
     }
     completed = true;
+    state.hostedCsvUrls = hostedUrls;
+    $("#download-hosted-csv").classList.remove("hidden");
     appendHostingLog("All images uploaded. Generating the Shopify CSV.", "muted");
     setWorking("Shopify CSV ready", `${queue.length} temporary image${queue.length === 1 ? "" : "s"} hosted. Import the downloaded CSV within 24 hours.`, 100);
   } catch (error) {
@@ -956,7 +960,7 @@ async function hostImagesAndDownloadCsv() {
     const downloaded = await downloadShopifyCsv(hostedUrls, true);
     if (downloaded) {
       $("#hosting-progress-title").textContent = "Shopify CSV downloaded";
-      $("#hosting-progress-detail").textContent = "The download has started. Import the CSV into Shopify within 24 hours.";
+      $("#hosting-progress-detail").textContent = "The download has started. If no file appears, click Download CSV now. Import it into Shopify within 24 hours.";
       appendHostingLog("Shopify CSV generated and download started.", "success");
     } else {
       $("#hosting-progress-title").textContent = "CSV download cancelled";
@@ -1080,6 +1084,11 @@ $("#dropzone").addEventListener("drop", (event) => { event.preventDefault(); eve
 $("#analyse").addEventListener("click", analyse);
 $("#upload").addEventListener("click", uploadAll);
 $("#host-and-download-shopify-csv").addEventListener("click", () => hostImagesAndDownloadCsv().catch((error) => alert(error.message)));
+$("#download-hosted-csv").addEventListener("click", async () => {
+  if (!state.hostedCsvUrls) return;
+  const downloaded = await downloadShopifyCsv(state.hostedCsvUrls, true);
+  if (downloaded) appendHostingLog("Shopify CSV download requested again.", "success");
+});
 $("#download-shopify-csv").addEventListener("click", () => downloadShopifyCsv().catch((error) => alert(error.message)));
 $("#reset").addEventListener("click", reset);
 document.querySelectorAll('input[name="export-mode"]').forEach((input) => input.addEventListener("change", () => setExportMode(input.value)));

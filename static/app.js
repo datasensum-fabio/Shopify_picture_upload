@@ -1,6 +1,6 @@
 import { BlobReader, BlobWriter, ZipReader } from "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.2/+esm";
 import { detectMetal, detectMetalInValues, filenameKeys, normalize, parseProductCode, productCodeKey, sha256Hex, similarity, visualFingerprintsMatch } from "./matching.js";
-import { projectShopifyImageCsv } from "./shopify-csv.js";
+import { isShopifyVariantRow, projectShopifyImageCsv } from "./shopify-csv.js";
 import { runConcurrent } from "./async-pool.js";
 import { applyReplacementResolution, replacementConflictGroups } from "./decision-conflicts.js";
 
@@ -426,6 +426,9 @@ async function loadCsvCatalog(file) {
     const selectedOptions = optionColumns.filter((item) => item.name >= 0 && item.value >= 0 && values[item.value]).map((item) => ({
       name: values[item.name] || "Option", value: values[item.value],
     }));
+    // A Shopify export repeats the product handle on image-only rows. Those rows
+    // are product media records, not variants, and must never receive Variant Image.
+    if (!isShopifyVariantRow(headers, values)) continue;
     const metal = detectMetalInValues([...selectedOptions.map((item) => item.value), sku]);
     const variantIndex = product.variants.nodes.length + 1;
     product.variants.nodes.push({

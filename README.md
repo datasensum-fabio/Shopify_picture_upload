@@ -68,6 +68,9 @@ The generated CSV keeps only the fields required to identify the affected produc
 and variants and modify their images: `Handle`, `Title`, available option/SKU
 columns, `Image Src`, `Image Position`, `Image Alt Text`, and `Variant Image`.
 Price, inventory, weight, vendor and other unrelated catalogue fields are omitted.
+`Variant Image` is emitted only on genuine variant rows containing variant identity
+or option values; image-only gallery rows always leave it blank so Shopify does not
+misinterpret them as incomplete variants.
 It retains existing images for **Add** and outputs only the chosen image for
 **Replace**. Before importing:
 
